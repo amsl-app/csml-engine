@@ -2,29 +2,29 @@ use diesel::{ExpressionMethods, QueryDsl};
 use diesel_async::RunQueryDsl;
 
 use crate::{
+    Client,
     encrypt::{decrypt_data, encrypt_data},
-    future::db_connectors::postgresql::get_db,
-    AsyncConversationInfo, AsyncPostgresqlClient, Client, EngineError, Memory,
 };
 
 use crate::db_connectors::postgresql::{models, schema::csml_memories};
 
+use crate::data::{AsyncPostgresqlClient, EngineError};
 use chrono::NaiveDateTime;
+use csml_interpreter::data::Memory;
 use std::collections::HashMap;
 
-pub async fn add_memories(
-    data: &mut AsyncConversationInfo<'_>,
-    memories: &HashMap<String, Memory>,
+pub async fn add_memories<S: std::hash::BuildHasher>(
+    client: &Client,
+    memories: &HashMap<String, Memory, S>,
     expires_at: Option<NaiveDateTime>,
+    db: &mut AsyncPostgresqlClient<'_>,
 ) -> Result<(), EngineError> {
     if memories.is_empty() {
         return Ok(());
     }
 
-    let db = get_db(&mut data.db)?;
-
-    for (key, mem) in memories.iter() {
-        create_client_memory(&data.client, key, &mem.value, expires_at, db).await?;
+    for (key, mem) in memories {
+        create_client_memory(client, key, &mem.value, expires_at, db).await?;
     }
 
     Ok(())
@@ -87,6 +87,23 @@ pub async fn internal_use_get_memories(
     Ok(serde_json::json!(map))
 }
 
+fn model_to_map(
+    memory: models::Memory,
+) -> Result<serde_json::Map<String, serde_json::Value>, EngineError> {
+    let value = decrypt_data(memory.value)?;
+    let map = [
+        ("key".to_owned(), serde_json::json!(memory.key)),
+        ("value".to_owned(), value),
+        (
+            "created_at".to_owned(),
+            serde_json::json!(memory.created_at.to_string()),
+        ),
+    ]
+    .into_iter()
+    .collect();
+    Ok(map)
+}
+
 pub async fn get_memories(
     client: &Client,
     db: &mut AsyncPostgresqlClient<'_>,
@@ -98,20 +115,10 @@ pub async fn get_memories(
         .load(db.client.as_mut())
         .await?;
 
-    let mut vec = vec![];
-    for mem in memories {
-        let value: serde_json::Value = decrypt_data(mem.value)?;
-        let mut memory = serde_json::Map::new();
-
-        memory.insert("key".to_owned(), serde_json::json!(mem.key));
-        memory.insert("value".to_owned(), value);
-        memory.insert(
-            "created_at".to_owned(),
-            serde_json::json!(mem.created_at.to_string()),
-        );
-
-        vec.push(memory);
-    }
+    let vec: Vec<serde_json::Map<_, _>> = memories
+        .into_iter()
+        .map(model_to_map)
+        .collect::<Result<_, _>>()?;
 
     Ok(serde_json::json!(vec))
 }
@@ -129,15 +136,7 @@ pub async fn get_memory(
         .get_result(db.client.as_mut())
         .await?;
 
-    let mut memory = serde_json::Map::new();
-    let value: serde_json::Value = decrypt_data(mem.value)?;
-
-    memory.insert("key".to_owned(), serde_json::json!(mem.key));
-    memory.insert("value".to_owned(), value);
-    memory.insert(
-        "created_at".to_owned(),
-        serde_json::json!(mem.created_at.to_string()),
-    );
+    let memory = model_to_map(mem)?;
 
     Ok(serde_json::json!(memory))
 }
@@ -155,8 +154,7 @@ pub async fn delete_client_memory(
             .filter(csml_memories::key.eq(key)),
     )
     .execute(db.client.as_mut())
-    .await
-    .ok();
+    .await?;
 
     Ok(())
 }
@@ -172,8 +170,7 @@ pub async fn delete_client_memories(
             .filter(csml_memories::user_id.eq(&client.user_id)),
     )
     .execute(db.client.as_mut())
-    .await
-    .ok();
+    .await?;
 
     Ok(())
 }
@@ -184,8 +181,7 @@ pub async fn delete_all_bot_data(
 ) -> Result<(), EngineError> {
     diesel::delete(csml_memories::table.filter(csml_memories::bot_id.eq(bot_id)))
         .execute(db.client.as_mut())
-        .await
-        .ok();
+        .await?;
 
     Ok(())
 }

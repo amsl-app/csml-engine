@@ -1,19 +1,25 @@
 use crate::data::primitive::string::PrimitiveString;
 use crate::data::{
-    ast::*, position::Position, tokens::*, warnings::DisplayWarnings, Data, Literal, MessageData,
-    MSG,
+    Data, Literal, MSG, MessageData,
+    ast::{Expr, Interval},
+    position::Position,
+    tokens::{BACKSLASH_DOUBLE_QUOTE, DOUBLE_QUOTE, Span},
+    warnings::DisplayWarnings,
 };
-use crate::error_format::{gen_nom_failure, CustomError, *};
+use crate::error_format::{
+    CustomError, ERROR_DOUBLE_CLOSE_BRACE, ERROR_DOUBLE_QUOTE, ERROR_PARSING,
+    ERROR_WRONG_ARGUMENT_EXPANDABLE_STRING, ErrorInfo, gen_error_info, gen_nom_failure,
+};
 use crate::interpreter::variable_handler::expr_to_literal;
 use crate::parser::operator::parse_operator;
 use crate::parser::parse_comments::comment;
 use crate::parser::tools::{get_interval, get_range_interval, parse_error};
 use nom::{
+    Err, FindSubstring, IResult, Input, Parser,
     bytes::complete::tag,
     combinator::cut,
     error::{ContextError, ParseError},
     sequence::{delimited, preceded},
-    *,
 };
 use std::sync::mpsc;
 
@@ -54,7 +60,7 @@ where
     let (rest, value) = s.take_split(length);
     let (value, interval) = get_interval(value)?;
 
-    let (_, string) = parser(value.fragment()).unwrap_or(("", value.fragment().to_string()));
+    let (_, string) = parser(value.fragment()).unwrap_or(("", (*value.fragment()).to_string()));
 
     expr_vector.push(Expr::LitExpr {
         literal: PrimitiveString::get_literal(&string, interval),
@@ -69,9 +75,9 @@ fn parse_close_bracket<'a, E>(s: Span<'a>) -> IResult<Span<'a>, Span<'a>, E>
 where
     E: ParseError<Span<'a>> + ContextError<Span<'a>>,
 {
-    match preceded(comment, tag("}}"))(s) {
+    match preceded(comment, tag("}}")).parse(s) {
         Ok((rest, val)) => Ok((rest, val)),
-        Err(Err::Error((s, _err))) | Err(Err::Failure((s, _err))) => {
+        Err(Err::Error((s, _err)) | Err::Failure((s, _err))) => {
             Err(gen_nom_failure(s, ERROR_WRONG_ARGUMENT_EXPANDABLE_STRING))
         }
         Err(Err::Incomplete(needed)) => Err(Err::Incomplete(needed)),
@@ -91,10 +97,7 @@ where
         }
 
         if c == '\\' {
-            escape = match escape {
-                true => false,
-                false => true,
-            }
+            escape = !escape;
         } else {
             escape = false;
         }
@@ -118,10 +121,7 @@ where
         }
 
         if c == '\\' {
-            escape = match escape {
-                true => false,
-                false => true,
-            }
+            escape = !escape;
         } else {
             escape = false;
         }
@@ -219,7 +219,7 @@ where
 
             let mut vector = vec![];
             let mut interval = vec![];
-            let mut string = string.to_owned();
+            let mut string = string;
 
             while !string.fragment().is_empty() {
                 match (string.find_substring("{{"), string.find_substring("}}")) {
@@ -233,9 +233,8 @@ where
                                 &mut interval,
                             )?;
                             let (split_rest, expression) =
-                                delimited(tag("{{"), parse_complex_string, parse_close_bracket)(
-                                    split_rest,
-                                )?;
+                                delimited(tag("{{"), parse_complex_string, parse_close_bracket)
+                                    .parse(split_rest)?;
                             vector.push(expression);
                             string = split_rest;
                         } else {
@@ -308,7 +307,7 @@ where
 {
     let (start, _) = get_interval(s)?;
 
-    let toto = match (
+    match (
         tag(DOUBLE_QUOTE)(s) as IResult<Span<'a>, Span<'a>, E>,
         tag(BACKSLASH_DOUBLE_QUOTE)(s) as IResult<Span<'a>, Span<'a>, E>,
     ) {
@@ -327,28 +326,28 @@ where
             ),
         ),
         (Err(err), ..) => Err(err),
-    };
-
-    toto
+    }
 }
 
 pub fn interpolate_string(
     string: &str,
     data: &mut Data,
     msg_data: &mut MessageData,
-    sender: &Option<mpsc::Sender<MSG>>,
+    sender: Option<&mpsc::Sender<MSG>>,
 ) -> Result<Literal, ErrorInfo> {
-    let string_formatted = format!("{:?}", string);
+    let string_formatted = format!("{string:?}");
     let span = Span::new(&string_formatted);
 
     match parse_string::<CustomError<Span>>(span) {
         Ok((span, expr)) => {
-            if !span.fragment().is_empty() {
+            if span.fragment().is_empty() {
+                expr_to_literal(&expr, DisplayWarnings::On, None, data, msg_data, sender)
+            } else {
                 Err(gen_error_info(
                     Position::new(
                         Interval::new_as_u32(
                             span.location_line(),
-                            span.get_column() as u32,
+                            u32::try_from(span.get_column())?,
                             span.location_offset(),
                             None,
                             None,
@@ -357,8 +356,6 @@ pub fn interpolate_string(
                     ),
                     ERROR_PARSING.to_owned(),
                 ))
-            } else {
-                expr_to_literal(&expr, &DisplayWarnings::On, None, data, msg_data, sender)
             }
         }
         Err(e) => match e {
@@ -366,7 +363,7 @@ pub fn interpolate_string(
                 Position::new(
                     Interval::new_as_u32(
                         err.input.location_line(),
-                        err.input.get_column() as u32,
+                        u32::try_from(err.input.get_column())?,
                         span.location_offset(),
                         None,
                         None,
@@ -391,7 +388,7 @@ mod tests {
     use nom::sequence::preceded;
 
     pub fn test_string(s: Span) -> IResult<Span, Expr> {
-        preceded(comment, parse_string)(s)
+        preceded(comment, parse_string).parse(s)
     }
 
     ////////////////////////////////////////////////////////////////////////////
@@ -403,10 +400,7 @@ mod tests {
         let string = "\"Hello\"";
         let span = Span::new(string);
 
-        match test_string(span) {
-            Ok(..) => {}
-            Err(e) => panic!("{:?}", e),
-        }
+        test_string(span).unwrap();
     }
 
     #[test]
@@ -414,10 +408,7 @@ mod tests {
         let string = "\"\\\"Hello\\\"\"";
         let span = Span::new(string);
 
-        match test_string(span) {
-            Ok(..) => {}
-            Err(e) => panic!("{:?}", e),
-        }
+        test_string(span).unwrap();
     }
 
     #[test]
@@ -425,10 +416,7 @@ mod tests {
         let string = "\"Hello World\"";
         let span = Span::new(string);
 
-        match test_string(span) {
-            Ok(..) => {}
-            Err(e) => panic!("{:?}", e),
-        }
+        test_string(span).unwrap();
     }
 
     #[test]
@@ -436,10 +424,7 @@ mod tests {
         let string = "\"Hello \\\"World\\\"\"";
         let span = Span::new(string);
 
-        match test_string(span) {
-            Ok(..) => {}
-            Err(e) => panic!("{:?}", e),
-        }
+        test_string(span).unwrap();
     }
 
     #[test]
@@ -447,10 +432,7 @@ mod tests {
         let string = "\"\\\"\"";
         let span = Span::new(string);
 
-        match test_string(span) {
-            Ok(..) => {}
-            Err(e) => panic!("{:?}", e),
-        }
+        test_string(span).unwrap();
     }
 
     #[test]
@@ -458,10 +440,7 @@ mod tests {
         let string = r#"\"\{{\""#;
         let span = Span::new(string);
 
-        match test_string(span) {
-            Ok(..) => {}
-            Err(e) => panic!("{:?}", e),
-        }
+        test_string(span).unwrap();
     }
 
     #[test]
@@ -469,10 +448,7 @@ mod tests {
         let string = r#"\"\}}\""#;
         let span = Span::new(string);
 
-        match test_string(span) {
-            Ok(..) => {}
-            Err(e) => panic!("{:?}", e),
-        }
+        test_string(span).unwrap();
     }
 
     #[test]
@@ -480,10 +456,7 @@ mod tests {
         let string = "\"";
         let span = Span::new(string);
 
-        match test_string(span) {
-            Ok(..) => panic!("need to fail"),
-            Err(_) => {}
-        }
+        test_string(span).expect_err("need to fail");
     }
 
     //////////////////////////////////////////////////////////////////////////
@@ -495,10 +468,7 @@ mod tests {
         let string = "\"{{ }}\"";
         let span = Span::new(string);
 
-        match test_string(span) {
-            Ok(..) => {}
-            Err(e) => panic!("{:?}", e),
-        }
+        test_string(span).unwrap();
     }
 
     #[test]
@@ -506,10 +476,7 @@ mod tests {
         let string = "\"{{}}\"";
         let span = Span::new(string);
 
-        match test_string(span) {
-            Ok(..) => {}
-            Err(e) => panic!("{:?}", e),
-        }
+        test_string(span).unwrap();
     }
 
     #[test]
@@ -517,10 +484,7 @@ mod tests {
         let string = r#"\"{{ 42 + 8 }}\""#;
         let span = Span::new(string);
 
-        match test_string(span) {
-            Ok(..) => {}
-            Err(e) => panic!("{:?}", e),
-        }
+        test_string(span).unwrap();
     }
 
     #[test]
@@ -528,10 +492,7 @@ mod tests {
         let string = "\"{{ \\\"Hello\\\" }}\"";
         let span = Span::new(string);
 
-        match test_string(span) {
-            Ok(..) => {}
-            Err(e) => panic!("{:?}", e),
-        }
+        test_string(span).unwrap();
     }
 
     #[test]
@@ -539,10 +500,7 @@ mod tests {
         let string = r#"\"{{ \"\" }}\""#;
         let span = Span::new(string);
 
-        match test_string(span) {
-            Ok(..) => {}
-            Err(e) => panic!("{:?}", e),
-        }
+        test_string(span).unwrap();
     }
 
     #[test]
@@ -550,10 +508,7 @@ mod tests {
         let string = r#"\"{{ Hello }}\""#;
         let span = Span::new(string);
 
-        match test_string(span) {
-            Ok(..) => {}
-            Err(e) => panic!("{:?}", e),
-        }
+        test_string(span).unwrap();
     }
 
     #[test]
@@ -561,10 +516,7 @@ mod tests {
         let string = r#"\"{{ [\"Hello\"] }}\""#;
         let span = Span::new(string);
 
-        match test_string(span) {
-            Ok(..) => {}
-            Err(e) => panic!("{:?}", e),
-        }
+        test_string(span).unwrap();
     }
 
     #[test]
@@ -572,10 +524,7 @@ mod tests {
         let string = r#"\"{{ [] }}\""#;
         let span = Span::new(string);
 
-        match test_string(span) {
-            Ok(..) => {}
-            Err(e) => panic!("{:?}", e),
-        }
+        test_string(span).unwrap();
     }
 
     #[test]
@@ -583,10 +532,7 @@ mod tests {
         let string = r#"\"{{ {\"Foo\":\"Bar\"} }}\""#;
         let span = Span::new(string);
 
-        match test_string(span) {
-            Ok(..) => {}
-            Err(e) => panic!("{:?}", e),
-        }
+        test_string(span).unwrap();
     }
 
     #[test]
@@ -594,10 +540,7 @@ mod tests {
         let string = r#"\"{{ {} }}\""#;
         let span = Span::new(string);
 
-        match test_string(span) {
-            Ok(..) => {}
-            Err(e) => panic!("{:?}", e),
-        }
+        test_string(span).unwrap();
     }
 
     #[test]
@@ -605,10 +548,7 @@ mod tests {
         let string = r#"\"{{ f() }}\""#;
         let span = Span::new(string);
 
-        match test_string(span) {
-            Ok(..) => {}
-            Err(e) => panic!("{:?}", e),
-        }
+        test_string(span).unwrap();
     }
 
     #[test]
@@ -616,10 +556,7 @@ mod tests {
         let string = r#"\"{{ f(\"hello\") }}\""#;
         let span = Span::new(string);
 
-        match test_string(span) {
-            Ok(..) => {}
-            Err(e) => panic!("{:?}", e),
-        }
+        test_string(span).unwrap();
     }
 
     #[test]
@@ -627,10 +564,7 @@ mod tests {
         let string = r#"\"{{ f(\"hello\", f(hello)) }}\""#;
         let span = Span::new(string);
 
-        match test_string(span) {
-            Ok(..) => {}
-            Err(e) => panic!("{:?}", e),
-        }
+        test_string(span).unwrap();
     }
 
     #[test]
@@ -638,10 +572,7 @@ mod tests {
         let string = r#"\"{{ [\"{{ Hello }}\"] as array }}\""#;
         let span = Span::new(string);
 
-        match test_string(span) {
-            Ok(..) => {}
-            Err(e) => panic!("{:?}", e),
-        }
+        test_string(span).unwrap();
     }
 
     #[test]
@@ -649,10 +580,7 @@ mod tests {
         let string = r#"\"{{ \"{{ Hello }}\" }}\""#;
         let span = Span::new(string);
 
-        match test_string(span) {
-            Ok(..) => {}
-            Err(e) => panic!("{:?}", e),
-        }
+        test_string(span).unwrap();
     }
 
     #[test]
@@ -660,10 +588,7 @@ mod tests {
         let string = "\"{{ Hello\"";
         let span = Span::new(string);
 
-        match test_string(span) {
-            Ok(..) => panic!("need to fail"),
-            Err(_) => {}
-        }
+        test_string(span).expect_err("need to fail");
     }
 
     #[test]
@@ -671,10 +596,7 @@ mod tests {
         let string = "\"Hello }}\"";
         let span = Span::new(string);
 
-        match test_string(span) {
-            Ok(..) => panic!("need to fail"),
-            Err(_) => {}
-        }
+        test_string(span).expect_err("need to fail");
     }
 
     #[test]
@@ -682,10 +604,7 @@ mod tests {
         let string = "\"}} {{\"";
         let span = Span::new(string);
 
-        match test_string(span) {
-            Ok(..) => panic!("need to fail"),
-            Err(_) => {}
-        }
+        test_string(span).expect_err("need to fail");
     }
 
     #[test]
@@ -693,9 +612,6 @@ mod tests {
         let string = "\"{{ Hello World }}\"";
         let span = Span::new(string);
 
-        match test_string(span) {
-            Ok(..) => panic!("need to fail"),
-            Err(_) => {}
-        }
+        test_string(span).expect_err("need to fail");
     }
 }

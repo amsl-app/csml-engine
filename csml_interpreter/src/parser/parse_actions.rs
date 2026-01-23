@@ -1,6 +1,15 @@
-use crate::data::{ast::*, csml_logs::LogLvl, tokens::*};
+use crate::data::{
+    Interval,
+    ast::{AssignType, DoType, Expr, ForgetMemory, Identifier, ObjectType},
+    csml_logs::LogLvl,
+    tokens::{
+        ADDITION_ASSIGNMENT, ASSIGN, Break, Continue, DEBUG_ACTION, DIVISION_ASSIGNMENT, DO,
+        FORGET, Hold, HoldSecure, LOG_ACTION, MULTIPLY_ASSIGNMENT, REMAINDER_ASSIGNMENT, REMEMBER,
+        RETURN, SAY, SUBTRACTION_ASSIGNMENT, Span, USE,
+    },
+};
 use crate::error_format::{
-    gen_nom_failure, ERROR_ACTION_ARGUMENT, ERROR_REMEMBER, ERROR_RETURN, ERROR_USE,
+    ERROR_ACTION_ARGUMENT, ERROR_REMEMBER, ERROR_RETURN, ERROR_USE, gen_nom_failure,
 };
 use crate::parser::{
     operator::parse_operator,
@@ -11,21 +20,20 @@ use crate::parser::{
     parse_if::parse_if,
     parse_path::parse_path,
     parse_previous::parse_previous,
-    parse_var_types::parse_r_bracket,
     parse_while_loop::parse_while,
     tools::{get_interval, get_string, get_tag},
 };
 
+use crate::data::tokens::{Bracket, Token};
+use crate::parser::parse_group::parse_group;
 use nom::{
+    Err, IResult, Parser,
     branch::alt,
     bytes::complete::{tag, take_while1},
     combinator::opt,
     error::{ContextError, ErrorKind, ParseError},
-    multi::separated_list0,
-    sequence::{preceded, terminated, tuple},
-    Err, IResult,
+    sequence::preceded,
 };
-
 ////////////////////////////////////////////////////////////////////////////////
 // TOOL FUNCTIONS
 ////////////////////////////////////////////////////////////////////////////////
@@ -82,9 +90,9 @@ fn parse_assignation<'a, E>(s: Span<'a>) -> IResult<Span<'a>, (Identifier, Box<E
 where
     E: ParseError<Span<'a>> + ContextError<Span<'a>>,
 {
-    let (s, name) = parse_idents_assignation(s)?;
-    let (s, _) = preceded(comment, tag(ASSIGN))(s)?;
-    let (s, expr) = preceded(comment, parse_operator)(s)?;
+    let (s, name) = parse_idents_assignation.parse(s)?;
+    let (s, _) = preceded(comment, tag(ASSIGN)).parse(s)?;
+    let (s, expr) = preceded(comment, parse_operator).parse(s)?;
 
     Ok((s, (name, Box::new(expr))))
 }
@@ -106,8 +114,9 @@ where
             subtraction_assignment,
             assignment,
         )),
-    )(s)?;
-    let (s, expr) = preceded(comment, parse_operator)(s)?;
+    )
+    .parse(s)?;
+    let (s, expr) = preceded(comment, parse_operator).parse(s)?;
 
     Ok((
         s,
@@ -153,26 +162,17 @@ fn parse_forget_list<'a, E>(s: Span<'a>) -> IResult<Span<'a>, ForgetMemory, E>
 where
     E: ParseError<Span<'a>> + ContextError<Span<'a>>,
 {
-    let (s, (vec, _)) = preceded(
-        tag(L_BRACKET),
-        terminated(
-            tuple((
-                separated_list0(preceded(comment, tag(COMMA)), parse_idents_usage),
-                opt(preceded(comment, tag(COMMA))),
-            )),
-            preceded(comment, parse_r_bracket),
-        ),
-    )(s)?;
+    let (s, vec) = parse_group(Bracket, parse_idents_usage).parse(s)?;
 
     Ok((s, ForgetMemory::LIST(vec)))
 }
 
-fn parse_action_argument<'a, E, F, G>(s: Span<'a>, func: F) -> IResult<Span<'a>, G, E>
+fn parse_action_argument<'a, E, F, G>(s: Span<'a>, parser: F) -> IResult<Span<'a>, G, E>
 where
     E: ParseError<Span<'a>> + ContextError<Span<'a>>,
-    F: FnMut(Span<'a>) -> IResult<Span<'a>, G, E>,
+    F: Parser<Span<'a>, Output = G, Error = E>,
 {
-    match preceded(comment, func)(s) {
+    match preceded(comment, parser).parse(s) {
         Ok(value) => Ok(value),
         Err(Err::Error(e)) => Err(Err::Failure(E::add_context(s, ERROR_ACTION_ARGUMENT, e))),
         Err(Err::Failure(e)) => Err(Err::Failure(e)),
@@ -188,7 +188,7 @@ fn parse_do<'a, E>(s: Span<'a>) -> IResult<Span<'a>, Expr, E>
 where
     E: ParseError<Span<'a>> + ContextError<Span<'a>>,
 {
-    let (s, name) = preceded(comment, get_string)(s)?;
+    let (s, name) = preceded(comment, get_string).parse(s)?;
     let (s, ..) = get_tag(name, DO)(s)?;
 
     let (s, expr) = parse_action_argument(s, alt((parse_assignation_with_path, parse_operator)))?;
@@ -215,7 +215,7 @@ fn parse_remember<'a, E>(s: Span<'a>) -> IResult<Span<'a>, Expr, E>
 where
     E: ParseError<Span<'a>> + ContextError<Span<'a>>,
 {
-    let (s, name) = preceded(comment, get_string)(s)?;
+    let (s, name) = preceded(comment, get_string).parse(s)?;
     let (s, ..) = get_tag(name, REMEMBER)(s)?;
 
     let (s, (idents, expr)) =
@@ -228,7 +228,7 @@ fn parse_forget<'a, E>(s: Span<'a>) -> IResult<Span<'a>, Expr, E>
 where
     E: ParseError<Span<'a>> + ContextError<Span<'a>>,
 {
-    let (s, name) = preceded(comment, get_string)(s)?;
+    let (s, name) = preceded(comment, get_string).parse(s)?;
     let (s, interval) = get_interval(s)?;
     let (s, ..) = get_tag(name, FORGET)(s)?;
 
@@ -250,7 +250,7 @@ fn parse_say<'a, E>(s: Span<'a>) -> IResult<Span<'a>, Expr, E>
 where
     E: ParseError<Span<'a>> + ContextError<Span<'a>>,
 {
-    let (s, name) = preceded(comment, get_string)(s)?;
+    let (s, name) = preceded(comment, get_string).parse(s)?;
     let (s, ..) = get_tag(name, SAY)(s)?;
 
     let (s, expr) = parse_action_argument(s, parse_operator)?;
@@ -262,7 +262,7 @@ fn parse_debug<'a, E>(s: Span<'a>) -> IResult<Span<'a>, Expr, E>
 where
     E: ParseError<Span<'a>> + ContextError<Span<'a>>,
 {
-    let (s, name) = preceded(comment, get_string)(s)?;
+    let (s, name) = preceded(comment, get_string).parse(s)?;
     let (s, mut interval) = get_interval(s)?;
     let (s, ..) = get_tag(name, DEBUG_ACTION)(s)?;
 
@@ -301,11 +301,11 @@ fn parse_log<'a, E>(s: Span<'a>) -> IResult<Span<'a>, Expr, E>
 where
     E: ParseError<Span<'a>> + ContextError<Span<'a>>,
 {
-    let (s, name) = preceded(comment, get_string)(s)?;
+    let (s, name) = preceded(comment, get_string).parse(s)?;
     let (s, mut interval) = get_interval(s)?;
     let (s, ..) = get_tag(name, LOG_ACTION)(s)?;
 
-    let (s, log_lvl) = match opt(parse_log_lvl)(s)? {
+    let (s, log_lvl) = match opt(parse_log_lvl).parse(s)? {
         (s, Some(log_lvl)) => (s, log_lvl),
         (s, None) => (s, LogLvl::Info),
     };
@@ -333,10 +333,10 @@ fn parse_use<'a, E>(s: Span<'a>) -> IResult<Span<'a>, Expr, E>
 where
     E: ParseError<Span<'a>> + ContextError<Span<'a>>,
 {
-    let (s, name) = preceded(comment, get_string)(s)?;
+    let (s, name) = preceded(comment, get_string).parse(s)?;
     let (s, ..) = get_tag(name, USE)(s)?;
 
-    let (s, expr) = preceded(comment, parse_operator)(s)?;
+    let (s, expr) = preceded(comment, parse_operator).parse(s)?;
 
     match expr {
         Expr::ObjectExpr(ObjectType::As(..)) => {}
@@ -346,14 +346,25 @@ where
     Ok((s, Expr::ObjectExpr(ObjectType::Use(Box::new(expr)))))
 }
 
+fn parse_control_flow<'a, E, T>(_token: T) -> impl Parser<Span<'a>, Output = Interval, Error = E>
+where
+    T: Token,
+    E: ParseError<Span<'a>> + ContextError<Span<'a>>,
+{
+    |s: Span<'a>| {
+        let (s, inter) = preceded(comment, get_interval).parse(s)?;
+        let (s, name) = get_string(s)?;
+
+        let (s, ..) = get_tag(name, T::TOKEN)(s)?;
+        Ok((s, inter))
+    }
+}
+
 fn parse_hold<'a, E>(s: Span<'a>) -> IResult<Span<'a>, Expr, E>
 where
     E: ParseError<Span<'a>> + ContextError<Span<'a>>,
 {
-    let (s, inter) = preceded(comment, get_interval)(s)?;
-    let (s, name) = get_string(s)?;
-
-    let (s, ..) = get_tag(name, HOLD)(s)?;
+    let (s, inter) = parse_control_flow(Hold).parse(s)?;
 
     Ok((s, Expr::ObjectExpr(ObjectType::Hold(inter))))
 }
@@ -362,10 +373,7 @@ fn parse_hold_secure<'a, E>(s: Span<'a>) -> IResult<Span<'a>, Expr, E>
 where
     E: ParseError<Span<'a>> + ContextError<Span<'a>>,
 {
-    let (s, inter) = preceded(comment, get_interval)(s)?;
-    let (s, name) = get_string(s)?;
-
-    let (s, ..) = get_tag(name, HOLD_SECURE)(s)?;
+    let (s, inter) = parse_control_flow(HoldSecure).parse(s)?;
 
     Ok((s, Expr::ObjectExpr(ObjectType::HoldSecure(inter))))
 }
@@ -374,10 +382,7 @@ fn parse_break<'a, E>(s: Span<'a>) -> IResult<Span<'a>, Expr, E>
 where
     E: ParseError<Span<'a>> + ContextError<Span<'a>>,
 {
-    let (s, inter) = preceded(comment, get_interval)(s)?;
-    let (s, name) = get_string(s)?;
-
-    let (s, ..) = get_tag(name, BREAK)(s)?;
+    let (s, inter) = parse_control_flow(Break).parse(s)?;
 
     Ok((s, Expr::ObjectExpr(ObjectType::Break(inter))))
 }
@@ -386,10 +391,7 @@ fn parse_continue<'a, E>(s: Span<'a>) -> IResult<Span<'a>, Expr, E>
 where
     E: ParseError<Span<'a>> + ContextError<Span<'a>>,
 {
-    let (s, inter) = preceded(comment, get_interval)(s)?;
-    let (s, name) = get_string(s)?;
-
-    let (s, ..) = get_tag(name, CONTINUE)(s)?;
+    let (s, inter) = parse_control_flow(Continue).parse(s)?;
 
     Ok((s, Expr::ObjectExpr(ObjectType::Continue(inter))))
 }
@@ -398,10 +400,10 @@ fn parse_return<'a, E>(s: Span<'a>) -> IResult<Span<'a>, Expr, E>
 where
     E: ParseError<Span<'a>> + ContextError<Span<'a>>,
 {
-    let (s, name) = preceded(comment, get_string)(s)?;
+    let (s, name) = preceded(comment, get_string).parse(s)?;
     let (s, ..) = get_tag(name, RETURN)(s)?;
 
-    let (s, expr) = match preceded(comment, parse_operator)(s) {
+    let (s, expr) = match preceded(comment, parse_operator).parse(s) {
         Ok(value) => value,
         Err(Err::Error(e)) => return Err(Err::Failure(E::add_context(s, ERROR_RETURN, e))),
         Err(Err::Failure(e)) => return Err(Err::Failure(e)),
@@ -442,5 +444,6 @@ where
         parse_return,
         // soon to be deprecated
         parse_use,
-    ))(s)
+    ))
+    .parse(s)
 }

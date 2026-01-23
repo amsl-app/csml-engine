@@ -12,7 +12,7 @@ use serde_json::Value;
 #[test]
 fn infinite_loop() {
     let msg = format_message(
-        Event::new("payload", "", serde_json::json!({})),
+        &Event::new("payload", "", serde_json::json!({})),
         Context::new(
             HashMap::new(),
             HashMap::new(),
@@ -27,5 +27,5 @@ fn infinite_loop() {
 
     let error: Value = message_to_json_value(msg);
 
-    assert_eq!("error", error["messages"][0]["content_type"])
+    assert_eq!("error", error["messages"][0]["content_type"]);
 }

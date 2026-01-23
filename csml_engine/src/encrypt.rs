@@ -1,9 +1,9 @@
 /**
- * Encryption and decryption utils for securely storing sensitive data.
- * It is not mandatory to setup encryption in CSML engine, however it is greatly recommended
+ * Encryption and decryption util for securely storing sensitive data.
+ * It is not mandatory to set up encryption in CSML engine, however, it is greatly recommended
  * if the chatbot is handling sensitive data of any sort.
  *
- * To automatically setup encryption/decryption of data, you must set an ENCRYPTION_SECRET
+ * To automatically set up encryption/decryption of data, you must set an `ENCRYPTION_SECRET`
  * environment variable with a complex enough string.
  *
  * Encrypt: Data is JSON-stringified before encryption, and is returned as an encrypted string.
@@ -11,29 +11,25 @@
  *
  * The encryption algorithm used is AES-256-GCM.
  */
-use crate::EngineError;
-
 #[cfg(all(feature = "openssl", not(feature = "rustls")))]
 use openssl::{
     pkcs5::pbkdf2_hmac,
     rand::rand_bytes,
-    symm::{decrypt_aead, encrypt_aead, Cipher},
+    symm::{Cipher, decrypt_aead, encrypt_aead},
 };
 
 use std::env;
 #[cfg(feature = "rustls")]
 use std::num::NonZeroU32;
 
+use crate::data::EngineError;
 #[cfg(feature = "rustls")]
 use aes_gcm::{
-    aead::{consts::U16, AeadCore, KeyInit, Payload},
-    aes::{cipher::Unsigned, Aes256},
     AeadInPlace, AesGcm,
+    aead::{AeadCore, KeyInit, OsRng, Payload, consts::U16, rand_core::RngCore},
+    aes::{Aes256, cipher::Unsigned},
 };
-
 use base64::Engine;
-#[cfg(feature = "rustls")]
-use rand::{rngs::OsRng, RngCore};
 #[cfg(feature = "rustls")]
 use ring::pbkdf2;
 
@@ -84,10 +80,10 @@ fn get_key(salt: &[u8], key: &mut [u8]) -> Result<(), EngineError> {
 
 /**
  * Decode base64 or hex-encoded strings.
- * The legacy engine used hex encoding which must still be decoded properly
+ * The legacy engine used hex encoding which must still be decoded properly,
  * so in case b64 does not work, try hex as well before returning an error.
- * This will not impact performance of newly-encrypted data, while
- * retaining full retrocompatibility with older data at a small cost.
+ * This will not impact the performance of newly encrypted data, while
+ * retaining full retro-compatibility with older data at a small cost.
  */
 fn decode(text: &str) -> Result<Vec<u8>, EngineError> {
     match hex::decode(text) {
@@ -145,8 +141,8 @@ pub fn encrypt_data(value: &serde_json::Value) -> Result<String, EngineError> {
 }
 
 #[cfg(all(feature = "openssl", not(feature = "rustls")))]
-fn decrypt(text: String) -> Result<String, EngineError> {
-    let ciphertext = decode(&text)?;
+fn decrypt(text: &str) -> Result<String, EngineError> {
+    let ciphertext = decode(text)?;
     let cipher = Cipher::aes_256_gcm();
 
     let iv_length = 16;
@@ -169,8 +165,8 @@ fn decrypt(text: String) -> Result<String, EngineError> {
 }
 
 #[cfg(feature = "rustls")]
-fn decrypt(text: String) -> Result<String, EngineError> {
-    let ciphertext = decode(&text)?;
+fn decrypt(text: &str) -> Result<String, EngineError> {
+    let ciphertext = decode(text)?;
 
     let nonce_length = 16;
     let salt_length = 64;
@@ -193,16 +189,13 @@ fn decrypt(text: String) -> Result<String, EngineError> {
     Ok(String::from_utf8_lossy(&buffer).to_string())
 }
 
-pub fn decrypt_data(value: String) -> Result<serde_json::Value, EngineError> {
-    match env::var("ENCRYPTION_SECRET") {
-        Ok(..) => {
-            let value: serde_json::Value = serde_json::from_str(&decrypt(value)?)?;
-            Ok(value)
-        }
-        _ => {
-            let value: serde_json::Value = serde_json::from_str(&value)?;
-            Ok(value)
-        }
+pub fn decrypt_data<T: AsRef<str>>(value: T) -> Result<serde_json::Value, EngineError> {
+    if env::var("ENCRYPTION_SECRET").is_ok() {
+        let value: serde_json::Value = serde_json::from_str(&decrypt(value.as_ref())?)?;
+        Ok(value)
+    } else {
+        let value: serde_json::Value = serde_json::from_str(value.as_ref())?;
+        Ok(value)
     }
 }
 
@@ -212,7 +205,8 @@ mod tests {
 
     #[test]
     fn test_get_key() -> Result<(), EngineError> {
-        env::set_var("ENCRYPTION_SECRET", "test");
+        // TODO: Audit that the environment access only happens in single-threaded code.
+        unsafe { env::set_var("ENCRYPTION_SECRET", "test") };
         let salt = b"test123";
         let key = b"key123".to_vec();
         let mut encrypted = key.clone();
@@ -225,11 +219,12 @@ mod tests {
 
     #[test]
     fn test_encrypt_decrypt() {
-        env::set_var("ENCRYPTION_SECRET", "test");
+        // TODO: Audit that the environment access only happens in single-threaded code.
+        unsafe { env::set_var("ENCRYPTION_SECRET", "test") };
         let text = "text".to_owned();
 
         let encrypted = encrypt(text.as_bytes()).unwrap();
-        let decrypted = decrypt(encrypted).unwrap();
+        let decrypted = decrypt(&encrypted).unwrap();
 
         assert_eq!(text, decrypted);
     }

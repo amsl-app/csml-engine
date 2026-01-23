@@ -22,7 +22,7 @@ fn string_step_0() {
             {"content":{"text": "hello world"}, "content_type":"text"}
         ]}"#;
     let msg = format_message(
-        Event::new("payload", "", serde_json::json!({})),
+        &Event::new("payload", "", serde_json::json!({})),
         Context::new(
             HashMap::new(),
             HashMap::new(),
@@ -38,7 +38,7 @@ fn string_step_0() {
     let v1: Value = message_to_json_value(msg);
     let v2: Value = serde_json::from_str(data).unwrap();
 
-    assert_eq!(v1, v2)
+    assert_eq!(v1, v2);
 }
 
 #[test]
@@ -53,7 +53,7 @@ fn string_step_1() {
             {"content":{"text": "true"}, "content_type":"text"}
         ]}"#;
     let msg = format_message(
-        Event::new("payload", "", serde_json::json!({})),
+        &Event::new("payload", "", serde_json::json!({})),
         Context::new(
             HashMap::new(),
             HashMap::new(),
@@ -69,7 +69,7 @@ fn string_step_1() {
     let v1: Value = message_to_json_value(msg);
     let v2: Value = serde_json::from_str(data).unwrap();
 
-    assert_eq!(v1, v2)
+    assert_eq!(v1, v2);
 }
 
 #[test]
@@ -86,7 +86,7 @@ fn string_step_2() {
             {"content":{"text": "false"}, "content_type":"text"}
         ]}"#;
     let msg = format_message(
-        Event::new("payload", "", serde_json::json!({})),
+        &Event::new("payload", "", serde_json::json!({})),
         Context::new(
             HashMap::new(),
             HashMap::new(),
@@ -102,7 +102,7 @@ fn string_step_2() {
     let v1: Value = message_to_json_value(msg);
     let v2: Value = serde_json::from_str(data).unwrap();
 
-    assert_eq!(v1, v2)
+    assert_eq!(v1, v2);
 }
 
 #[test]
@@ -113,7 +113,7 @@ fn string_step_3() {
             {"content":{"text": "true"}, "content_type":"text"}
         ]}"#;
     let msg = format_message(
-        Event::new("payload", "", serde_json::json!({})),
+        &Event::new("payload", "", serde_json::json!({})),
         Context::new(
             HashMap::new(),
             HashMap::new(),
@@ -129,7 +129,7 @@ fn string_step_3() {
     let v1: Value = message_to_json_value(msg);
     let v2: Value = serde_json::from_str(data).unwrap();
 
-    assert_eq!(v1, v2)
+    assert_eq!(v1, v2);
 }
 
 #[test]
@@ -144,7 +144,7 @@ fn string_step_4() {
             {"content_type":"text", "content":{"text": "[\"Hell\",\"\"]"}}
         ]}"#;
     let msg = format_message(
-        Event::new("payload", "", serde_json::json!({})),
+        &Event::new("payload", "", serde_json::json!({})),
         Context::new(
             HashMap::new(),
             HashMap::new(),
@@ -160,7 +160,7 @@ fn string_step_4() {
     let v1: Value = message_to_json_value(msg);
     let v2: Value = serde_json::from_str(data).unwrap();
 
-    assert_eq!(v1, v2)
+    assert_eq!(v1, v2);
 }
 
 #[test]
@@ -172,7 +172,7 @@ fn string_step_5() {
             {"content_type":"text", "content":{"text": "Hello"}}
         ]}"#;
     let msg = format_message(
-        Event::new("payload", "", serde_json::json!({})),
+        &Event::new("payload", "", serde_json::json!({})),
         Context::new(
             HashMap::new(),
             HashMap::new(),
@@ -188,7 +188,7 @@ fn string_step_5() {
     let v1: Value = message_to_json_value(msg);
     let v2: Value = serde_json::from_str(data).unwrap();
 
-    assert_eq!(v1, v2)
+    assert_eq!(v1, v2);
 }
 
 #[test]
@@ -199,7 +199,7 @@ fn string_step_6() {
             {"content_type":"text", "content":{"text": "Hello World"}}
         ]}"#;
     let msg = format_message(
-        Event::new("payload", "", serde_json::json!({})),
+        &Event::new("payload", "", serde_json::json!({})),
         Context::new(
             HashMap::new(),
             HashMap::new(),
@@ -215,7 +215,7 @@ fn string_step_6() {
     let v1: Value = message_to_json_value(msg);
     let v2: Value = serde_json::from_str(data).unwrap();
 
-    assert_eq!(v1, v2)
+    assert_eq!(v1, v2);
 }
 
 #[test]
@@ -231,7 +231,7 @@ fn string_step_7() {
             {"content_type":"text", "content":{"text": "o"}}
         ]}"#;
     let msg = format_message(
-        Event::new("payload", "", serde_json::json!({})),
+        &Event::new("payload", "", serde_json::json!({})),
         Context::new(
             HashMap::new(),
             HashMap::new(),
@@ -247,7 +247,7 @@ fn string_step_7() {
     let v1: Value = message_to_json_value(msg);
     let v2: Value = serde_json::from_str(data).unwrap();
 
-    assert_eq!(v1, v2)
+    assert_eq!(v1, v2);
 }
 
 #[test]
@@ -258,7 +258,7 @@ fn string_step_8() {
             {"content_type":"text", "content":{"text": "😆"}}
         ]}"#;
     let msg = format_message(
-        Event::new("payload", "", serde_json::json!({})),
+        &Event::new("payload", "", serde_json::json!({})),
         Context::new(
             HashMap::new(),
             HashMap::new(),
@@ -274,7 +274,7 @@ fn string_step_8() {
     let v1: Value = message_to_json_value(msg);
     let v2: Value = serde_json::from_str(data).unwrap();
 
-    assert_eq!(v1, v2)
+    assert_eq!(v1, v2);
 }
 
 #[test]
@@ -286,7 +286,7 @@ fn string_step_9() {
             {"content_type":"text", "content":{"text": "😆Hello World 😆"}}
         ]}"#;
     let msg = format_message(
-        Event::new("payload", "", serde_json::json!({})),
+        &Event::new("payload", "", serde_json::json!({})),
         Context::new(
             HashMap::new(),
             HashMap::new(),
@@ -302,7 +302,7 @@ fn string_step_9() {
     let v1: Value = message_to_json_value(msg);
     let v2: Value = serde_json::from_str(data).unwrap();
 
-    assert_eq!(v1, v2)
+    assert_eq!(v1, v2);
 }
 
 #[test]
@@ -313,7 +313,7 @@ fn string_step_10() {
             {"content_type":"text", "content":{"text": "test Hello World 😆"}}
         ]}"#;
     let msg = format_message(
-        Event::new("payload", "", serde_json::json!({})),
+        &Event::new("payload", "", serde_json::json!({})),
         Context::new(
             HashMap::new(),
             HashMap::new(),
@@ -329,7 +329,7 @@ fn string_step_10() {
     let v1: Value = message_to_json_value(msg);
     let v2: Value = serde_json::from_str(data).unwrap();
 
-    assert_eq!(v1, v2)
+    assert_eq!(v1, v2);
 }
 
 #[test]
@@ -341,7 +341,7 @@ fn string_step_11() {
             {"content_type":"text", "content":{"text": "Hello World"}}
         ]}"#;
     let msg = format_message(
-        Event::new("payload", "", serde_json::json!({})),
+        &Event::new("payload", "", serde_json::json!({})),
         Context::new(
             HashMap::new(),
             HashMap::new(),
@@ -357,7 +357,7 @@ fn string_step_11() {
     let v1: Value = message_to_json_value(msg);
     let v2: Value = serde_json::from_str(data).unwrap();
 
-    assert_eq!(v1, v2)
+    assert_eq!(v1, v2);
 }
 
 #[test]
@@ -365,10 +365,11 @@ fn string_step_12_slice() {
     let data = r#"{
         "memories":[],
         "messages":[
-            {"content_type":"text", "content":{"text": "Hel"}}
+            {"content_type":"text", "content":{"text": "Hel"}},
+            {"content_type":"text", "content":{"text": "ld"}}
         ]}"#;
     let msg = format_message(
-        Event::new("payload", "", serde_json::json!({})),
+        &Event::new("payload", "", serde_json::json!({})),
         Context::new(
             HashMap::new(),
             HashMap::new(),
@@ -384,7 +385,36 @@ fn string_step_12_slice() {
     let v1: Value = message_to_json_value(msg);
     let v2: Value = serde_json::from_str(data).unwrap();
 
-    assert_eq!(v1, v2)
+    assert_eq!(v1, v2);
+}
+
+#[test]
+fn string_step_12b_slice_error() {
+    let data = r#"{
+        "memories":[],
+        "messages":[
+            { "content_type": "error", "content": {"error": "usage: slice(start: Integer, end: Optional<Integer>) => string at line 95, column 23 at flow [flow]"} },
+            { "content_type": "text", "content": {"text": null} },
+            { "content_type": "error", "content": {"error": "usage: slice(start: Integer, end: Optional<Integer>) => string at line 96, column 23 at flow [flow]"} },
+            { "content_type": "text", "content": {"text": null} }
+        ]}"#;
+    let msg = format_message(
+        &Event::new("payload", "", serde_json::json!({})),
+        Context::new(
+            HashMap::new(),
+            HashMap::new(),
+            None,
+            None,
+            "step_12b_slice_error",
+            "flow",
+            None,
+        ),
+        "CSML/basic_test/stdlib/string.csml",
+    );
+    let v1: Value = message_to_json_value(msg);
+    let v2: Value = serde_json::from_str(data).unwrap();
+
+    assert_eq!(v1, v2);
 }
 
 #[test]
@@ -395,7 +425,7 @@ fn string_step_13_to_string() {
             {"content_type":"text", "content":{"text": "\"4\""}}
         ]}"#;
     let msg = format_message(
-        Event::new("payload", "", serde_json::json!({})),
+        &Event::new("payload", "", serde_json::json!({})),
         Context::new(
             HashMap::new(),
             HashMap::new(),
@@ -411,7 +441,7 @@ fn string_step_13_to_string() {
     let v1: Value = message_to_json_value(msg);
     let v2: Value = serde_json::from_str(data).unwrap();
 
-    assert_eq!(v1, v2)
+    assert_eq!(v1, v2);
 }
 
 #[test]
@@ -422,7 +452,7 @@ fn string_step_14_to_string() {
             {"content_type":"text", "content":{"text": "😆\"2\""}}
         ]}"#;
     let msg = format_message(
-        Event::new("payload", "", serde_json::json!({})),
+        &Event::new("payload", "", serde_json::json!({})),
         Context::new(
             HashMap::new(),
             HashMap::new(),
@@ -438,7 +468,7 @@ fn string_step_14_to_string() {
     let v1: Value = message_to_json_value(msg);
     let v2: Value = serde_json::from_str(data).unwrap();
 
-    assert_eq!(v1, v2)
+    assert_eq!(v1, v2);
 }
 
 #[test]
@@ -446,10 +476,10 @@ fn string_step_15_xml() {
     let data = r#"{
         "memories":[],
         "messages":[
-            {"content_type":"text", "content":{"text": "<Item><name>Banana</name><source>Store</source></Item>"}}
+            {"content_type":"text", "content":{"text": "<?xml version=\"1.0\" encoding=\"UTF-8\"?><Item><name>Banana</name><source>Store</source></Item>"}}
         ]}"#;
     let msg = format_message(
-        Event::new("payload", "", serde_json::json!({})),
+        &Event::new("payload", "", serde_json::json!({})),
         Context::new(
             HashMap::new(),
             HashMap::new(),
@@ -465,7 +495,7 @@ fn string_step_15_xml() {
     let v1: Value = message_to_json_value(msg);
     let v2: Value = serde_json::from_str(data).unwrap();
 
-    assert_eq!(v1, v2)
+    assert_eq!(v1, v2);
 }
 
 #[test]
@@ -473,10 +503,10 @@ fn string_step_16_yaml() {
     let data = r#"{
         "memories":[],
         "messages":[
-            {"content_type":"text", "content":{"text": "---\nx: 1.0\ny: 2.0\n"}}
+            {"content_type":"text", "content":{"text": "x: 1.0\n'y': 2.0\n"}}
         ]}"#;
     let msg = format_message(
-        Event::new("payload", "", serde_json::json!({})),
+        &Event::new("payload", "", serde_json::json!({})),
         Context::new(
             HashMap::new(),
             HashMap::new(),
@@ -492,7 +522,7 @@ fn string_step_16_yaml() {
     let v1: Value = message_to_json_value(msg);
     let v2: Value = serde_json::from_str(data).unwrap();
 
-    assert_eq!(v1, v2)
+    assert_eq!(v1, v2);
 }
 
 #[test]
@@ -508,7 +538,7 @@ fn string_step_17_uri() {
             }
         ]}"#;
     let msg = format_message(
-        Event::new("payload", "", serde_json::json!({})),
+        &Event::new("payload", "", serde_json::json!({})),
         Context::new(
             HashMap::new(),
             HashMap::new(),
@@ -524,7 +554,7 @@ fn string_step_17_uri() {
     let v1: Value = message_to_json_value(msg);
     let v2: Value = serde_json::from_str(data).unwrap();
 
-    assert_eq!(v1, v2)
+    assert_eq!(v1, v2);
 }
 
 #[test]
@@ -540,7 +570,7 @@ fn string_step_18_html_escape() {
             }
         ]}"#;
     let msg = format_message(
-        Event::new("payload", "", serde_json::json!({})),
+        &Event::new("payload", "", serde_json::json!({})),
         Context::new(
             HashMap::new(),
             HashMap::new(),
@@ -556,5 +586,5 @@ fn string_step_18_html_escape() {
     let v1: Value = message_to_json_value(msg);
     let v2: Value = serde_json::from_str(data).unwrap();
 
-    assert_eq!(v1, v2)
+    assert_eq!(v1, v2);
 }

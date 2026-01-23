@@ -1,240 +1,162 @@
 #[cfg(feature = "postgresql-async")]
-use crate::future::db_connectors::{is_postgresql, postgresql_connector};
+use crate::future::db_connectors::postgresql_connector;
+#[cfg(feature = "sea-orm")]
+use crate::future::db_connectors::sea_orm_connector;
 
-use crate::data::AsyncDatabase;
+use uuid::Uuid;
+
+use crate::data::{AsyncDatabase, EngineError, SeaOrmDbTraits};
 use crate::error_messages::ERROR_DB_SETUP;
 use crate::models::BotVersion;
-use crate::{CsmlBot, EngineError};
-use csml_interpreter::data::csml_logs::*;
+use csml_interpreter::data::CsmlBot;
 
-pub async fn create_bot_version(
+pub async fn create_bot_version<T: SeaOrmDbTraits>(
     bot_id: String,
     csml_bot: CsmlBot,
-    db: &mut AsyncDatabase<'_>,
+    db: &mut AsyncDatabase<'_, T>,
 ) -> Result<String, EngineError> {
-    csml_logger(
-        CsmlLog::new(
-            None,
-            None,
-            None,
-            format!("db call create bot version, bot_id: {:?}", bot_id),
-        ),
-        LogLvl::Info,
-    );
-    csml_logger(
-        CsmlLog::new(
-            None,
-            None,
-            None,
-            format!(
-                "db call create bot version, bot_id: {:?}, csml_bot: {:?}",
-                bot_id, csml_bot
-            ),
-        ),
-        LogLvl::Debug,
-    );
+    tracing::debug!(bot_id, ?csml_bot, "db call create bot version");
 
-    #[cfg(feature = "postgresql-async")]
-    if is_postgresql() {
-        let db = postgresql_connector::get_db(db)?;
+    let serializable_bot = crate::data::to_serializable_bot(&csml_bot);
+    let bot = serde_json::json!(serializable_bot).to_string();
 
-        let serializable_bot = crate::data::to_serializable_bot(&csml_bot);
-        let bot = serde_json::json!(serializable_bot).to_string();
+    match db {
+        #[cfg(feature = "postgresql-async")]
+        AsyncDatabase::Postgresql(db) => {
+            let version_id = postgresql_connector::bot::create_bot_version(bot_id, bot, db).await?;
 
-        let version_id = postgresql_connector::bot::create_bot_version(bot_id, bot, db).await?;
+            Ok(version_id)
+        }
+        AsyncDatabase::SeaOrm(db) => {
+            let version_id =
+                sea_orm_connector::bot::create_bot_version(db.db_ref(), bot_id, bot).await?;
 
-        return Ok(version_id);
+            Ok(version_id.to_string())
+        }
+        #[cfg(not(feature = "sea-orm"))]
+        AsyncDatabase::_Impossible(_, _) => unreachable!(),
     }
-
-    Err(EngineError::Manager(ERROR_DB_SETUP.to_owned()))
 }
 
-pub async fn get_last_bot_version(
+pub async fn get_last_bot_version<T: SeaOrmDbTraits>(
     bot_id: &str,
-    db: &mut AsyncDatabase<'_>,
+    db: &mut AsyncDatabase<'_, T>,
 ) -> Result<Option<BotVersion>, EngineError> {
-    csml_logger(
-        CsmlLog::new(
-            None,
-            None,
-            None,
-            format!("db call get last bot version, bot_id: {:?}", bot_id),
-        ),
-        LogLvl::Info,
-    );
+    tracing::debug!(bot_id, "db call get last bot version");
 
-    #[cfg(feature = "postgresql-async")]
-    if is_postgresql() {
-        let db = postgresql_connector::get_db(db)?;
-        return postgresql_connector::bot::get_last_bot_version(bot_id, db).await;
+    match db {
+        #[cfg(feature = "postgresql-async")]
+        AsyncDatabase::Postgresql(db) => {
+            postgresql_connector::bot::get_last_bot_version(bot_id, db).await
+        }
+        #[cfg(feature = "sea-orm")]
+        AsyncDatabase::SeaOrm(db) => {
+            sea_orm_connector::bot::get_last_bot_version(bot_id, db.db_ref()).await
+        }
+        #[cfg(not(feature = "sea-orm"))]
+        AsyncDatabase::_Impossible(_, _) => unreachable!(),
     }
-
-    Err(EngineError::Manager(ERROR_DB_SETUP.to_owned()))
 }
 
-pub async fn get_by_version_id(
-    version_id: &str,
-    _bot_id: &str,
-    db: &mut AsyncDatabase<'_>,
+pub async fn get_by_version_id<T: SeaOrmDbTraits>(
+    version_id: Uuid,
+    db: &mut AsyncDatabase<'_, T>,
 ) -> Result<Option<BotVersion>, EngineError> {
-    csml_logger(
-        CsmlLog::new(
-            None,
-            None,
-            None,
-            format!("db call get by version id, version_id: {:?}", version_id),
-        ),
-        LogLvl::Info,
-    );
-    csml_logger(
-        CsmlLog::new(
-            None,
-            None,
-            None,
-            format!(
-                "db call get by version id, version_id: {:?}, bot_id: {:?}",
-                version_id, _bot_id
-            ),
-        ),
-        LogLvl::Debug,
-    );
+    tracing::debug!(%version_id, "db call get by version id");
 
-    #[cfg(feature = "postgresql-async")]
-    if is_postgresql() {
-        let db = postgresql_connector::get_db(db)?;
-        return postgresql_connector::bot::get_bot_by_version_id(version_id, db).await;
+    match db {
+        #[cfg(feature = "postgresql-async")]
+        AsyncDatabase::Postgresql(db) => {
+            postgresql_connector::bot::get_bot_by_version_id(version_id, db).await
+        }
+        #[cfg(feature = "sea-orm")]
+        AsyncDatabase::SeaOrm(db) => {
+            sea_orm_connector::bot::get_bot_by_version_id(version_id, db.db_ref()).await
+        }
+        #[cfg(not(feature = "sea-orm"))]
+        AsyncDatabase::_Impossible(_, _) => unreachable!(),
     }
-
-    Err(EngineError::Manager(ERROR_DB_SETUP.to_owned()))
 }
 
-pub async fn get_bot_versions(
+pub async fn get_bot_versions<T: SeaOrmDbTraits>(
     bot_id: &str,
     limit: Option<u32>,
     pagination_key: Option<u32>,
-    db: &mut AsyncDatabase<'_>,
+    db: &mut AsyncDatabase<'_, T>,
 ) -> Result<serde_json::Value, EngineError> {
-    csml_logger(
-        CsmlLog::new(
-            None,
-            None,
-            None,
-            format!("db call get bot versions, bot_id: {:?}", bot_id),
-        ),
-        LogLvl::Info,
-    );
-    csml_logger(
-        CsmlLog::new(
-            None,
-            None,
-            None,
-            format!(
-                "db call get bot versions, bot_id: {:?}, limit {:?}, pagination_key {:?}",
-                bot_id, limit, pagination_key
-            ),
-        ),
-        LogLvl::Debug,
-    );
+    tracing::debug!(bot_id, ?limit, ?pagination_key, "db call get bot versions");
 
-    #[cfg(feature = "postgresql-async")]
-    if is_postgresql() {
-        let db = postgresql_connector::get_db(db)?;
-        return postgresql_connector::bot::get_bot_versions(bot_id, limit, pagination_key, db)
-            .await;
+    match db {
+        #[cfg(feature = "postgresql-async")]
+        AsyncDatabase::Postgresql(db) => {
+            postgresql_connector::bot::get_bot_versions(bot_id, limit, pagination_key, db).await
+        }
+        #[cfg(feature = "sea-orm")]
+        AsyncDatabase::SeaOrm(db) => {
+            sea_orm_connector::bot::get_bot_versions(
+                db.db_ref(),
+                bot_id,
+                limit.map(u64::from),
+                pagination_key.map(u64::from),
+            )
+            .await
+        }
+        #[cfg(not(feature = "sea-orm"))]
+        AsyncDatabase::_Impossible(_, _) => unreachable!(),
     }
-
-    Err(EngineError::Manager(ERROR_DB_SETUP.to_owned()))
 }
 
-pub async fn delete_bot_version(
+pub async fn delete_bot_version<T: SeaOrmDbTraits>(
     _bot_id: &str,
     version_id: &str,
-    db: &mut AsyncDatabase<'_>,
+    db: &mut AsyncDatabase<'_, T>,
 ) -> Result<(), EngineError> {
-    csml_logger(
-        CsmlLog::new(
-            None,
-            None,
-            None,
-            format!("db call delete bot version, version_id: {:?}", version_id),
-        ),
-        LogLvl::Info,
-    );
-    csml_logger(
-        CsmlLog::new(
-            None,
-            None,
-            None,
-            format!("db call delete bot version, version_id: {:?}", version_id),
-        ),
-        LogLvl::Debug,
-    );
+    tracing::debug!(version_id, "db call delete bot version");
 
-    #[cfg(feature = "postgresql-async")]
-    if is_postgresql() {
-        let db = postgresql_connector::get_db(db)?;
-        return postgresql_connector::bot::delete_bot_version(version_id, db).await;
+    match db {
+        #[cfg(feature = "postgresql-async")]
+        AsyncDatabase::Postgresql(db) => {
+            postgresql_connector::bot::delete_bot_version(version_id, db).await
+        }
+        _ => Err(EngineError::Manager(ERROR_DB_SETUP.to_owned())),
     }
-
-    Err(EngineError::Manager(ERROR_DB_SETUP.to_owned()))
 }
 
-pub async fn delete_bot_versions(
+pub async fn delete_bot_versions<T: SeaOrmDbTraits>(
     bot_id: &str,
-    db: &mut AsyncDatabase<'_>,
+    db: &mut AsyncDatabase<'_, T>,
 ) -> Result<(), EngineError> {
-    csml_logger(
-        CsmlLog::new(None, None, None, "db call delete bot versions".to_string()),
-        LogLvl::Info,
-    );
-    csml_logger(
-        CsmlLog::new(
-            None,
-            None,
-            None,
-            format!("db call delete bot versions, bot_id: {:?}", bot_id),
-        ),
-        LogLvl::Debug,
-    );
+    tracing::debug!(bot_id, "db call delete bot versions");
 
-    #[cfg(feature = "postgresql-async")]
-    if is_postgresql() {
-        let db = postgresql_connector::get_db(db)?;
-        return postgresql_connector::bot::delete_bot_versions(bot_id, db).await;
+    match db {
+        #[cfg(feature = "postgresql-async")]
+        AsyncDatabase::Postgresql(db) => {
+            postgresql_connector::bot::delete_bot_versions(bot_id, db).await
+        }
+        #[cfg(feature = "sea-orm")]
+        AsyncDatabase::SeaOrm(db) => {
+            sea_orm_connector::bot::delete_bot_versions(db.db_ref(), bot_id).await
+        }
+        #[cfg(not(feature = "sea-orm"))]
+        AsyncDatabase::_Impossible(_, _) => unreachable!(),
     }
-
-    Err(EngineError::Manager(ERROR_DB_SETUP.to_owned()))
 }
 
-pub async fn delete_all_bot_data(
+pub async fn delete_all_bot_data<T: SeaOrmDbTraits>(
     bot_id: &str,
-    db: &mut AsyncDatabase<'_>,
+    db: &mut AsyncDatabase<'_, T>,
 ) -> Result<(), EngineError> {
-    csml_logger(
-        CsmlLog::new(None, None, None, "db call delete all bot data".to_string()),
-        LogLvl::Info,
-    );
-    csml_logger(
-        CsmlLog::new(
-            None,
-            None,
-            None,
-            format!("db call delete all bot data, bot_id: {:?}", bot_id),
-        ),
-        LogLvl::Debug,
-    );
+    tracing::debug!(bot_id, "db call delete all bot data");
 
-    #[cfg(feature = "postgresql-async")]
-    if is_postgresql() {
-        delete_bot_versions(bot_id, db).await?;
-
-        let db = postgresql_connector::get_db(db)?;
-
-        postgresql_connector::conversations::delete_all_bot_data(bot_id, db).await?;
-        postgresql_connector::memories::delete_all_bot_data(bot_id, db).await?;
-        postgresql_connector::state::delete_all_bot_data(bot_id, db).await?;
-        return Ok(());
+    match db {
+        #[cfg(feature = "postgresql-async")]
+        AsyncDatabase::Postgresql(db) => {
+            postgresql_connector::bot::delete_bot_versions(bot_id, db).await?;
+            postgresql_connector::conversations::delete_all_bot_data(bot_id, db).await?;
+            postgresql_connector::memories::delete_all_bot_data(bot_id, db).await?;
+            postgresql_connector::state::delete_all_bot_data(bot_id, db).await?;
+            Ok(())
+        }
+        _ => Err(EngineError::Manager(ERROR_DB_SETUP.to_owned())),
     }
-
-    Err(EngineError::Manager(ERROR_DB_SETUP.to_owned()))
 }

@@ -1,15 +1,15 @@
 use crate::data::{
     ast::{FromFlow, Interval},
-    warnings::*,
+    warnings::Warnings,
 };
 use crate::error_format::ErrorInfo;
 use std::collections::{HashMap, HashSet};
 use std::hash::{Hash, Hasher};
 
 #[derive(Debug, Clone)]
-pub enum StepBreakers {
-    HOLD(Interval),
-    GOTO {
+pub(crate) enum StepBreakers {
+    Hold,
+    Goto {
         step: String,
         flow: String,
         interval: Interval,
@@ -17,7 +17,7 @@ pub enum StepBreakers {
 }
 
 #[derive(Debug, Clone)]
-pub struct StepInfo<'a> {
+pub(crate) struct StepInfo<'a> {
     pub flow: String,
     pub step: String,
     pub raw_flow: &'a str,
@@ -30,7 +30,6 @@ pub struct StepInfo<'a> {
 pub struct ConstantInfo<'a> {
     pub name: String,
     pub raw_flow: &'a str,
-    pub interval: Interval,
 }
 #[derive(Debug, Clone)]
 pub struct FlowConstantUse<'a> {
@@ -52,7 +51,6 @@ pub struct FunctionCallInfo<'a> {
 pub struct FunctionInfo<'a> {
     pub name: String,
     pub in_flow: &'a str,
-    pub raw_flow: &'a str,
     pub extern_module: bool,
     pub interval: Interval,
 }
@@ -105,7 +103,7 @@ pub struct LinterInfo<'a> {
     pub functions_call_list: &'a mut Vec<FunctionCallInfo<'a>>,
     pub errors: &'a mut Vec<ErrorInfo>,
     pub warnings: &'a mut Vec<Warnings>,
-    pub native_components: &'a Option<serde_json::Map<String, serde_json::Value>>,
+    pub native_components: Option<&'a serde_json::Map<String, serde_json::Value>>,
 }
 
 ////////////////////////////////////////////////////////////////////////////////
@@ -113,32 +111,32 @@ pub struct LinterInfo<'a> {
 ////////////////////////////////////////////////////////////////////////////////
 //Step/////////////////
 
-impl<'a> Hash for StepInfo<'a> {
+impl Hash for StepInfo<'_> {
     fn hash<H: Hasher>(&self, state: &mut H) {
         self.step.hash(state);
-        self.flow.hash(state)
+        self.flow.hash(state);
     }
 }
 
-impl<'a> PartialEq for StepInfo<'a> {
+impl PartialEq for StepInfo<'_> {
     fn eq(&self, other: &Self) -> bool {
         self.step == other.step && self.flow == other.flow
     }
 }
 
-impl<'a> Eq for StepInfo<'a> {}
+impl Eq for StepInfo<'_> {}
 
 //Function/////////////////
 
-impl<'a> Hash for FunctionInfo<'a> {
+impl Hash for FunctionInfo<'_> {
     fn hash<H: Hasher>(&self, state: &mut H) {
         self.name.hash(state);
         self.in_flow.hash(state);
-        self.extern_module.hash(state)
+        self.extern_module.hash(state);
     }
 }
 
-impl<'a> PartialEq for FunctionInfo<'a> {
+impl PartialEq for FunctionInfo<'_> {
     fn eq(&self, other: &Self) -> bool {
         self.name == other.name
             && self.in_flow == other.in_flow
@@ -146,47 +144,48 @@ impl<'a> PartialEq for FunctionInfo<'a> {
     }
 }
 
-impl<'a> Eq for FunctionInfo<'a> {}
+impl Eq for FunctionInfo<'_> {}
 
 //Import/////////////////
 
-impl<'a> Hash for ImportInfo<'a> {
+impl Hash for ImportInfo<'_> {
     fn hash<H: Hasher>(&self, state: &mut H) {
         self.as_name.hash(state);
-        self.in_flow.hash(state)
+        self.in_flow.hash(state);
     }
 }
 
-impl<'a> PartialEq for ImportInfo<'a> {
+impl PartialEq for ImportInfo<'_> {
     fn eq(&self, other: &Self) -> bool {
         self.as_name == other.as_name && self.in_flow == other.in_flow
     }
 }
 
-impl<'a> Eq for ImportInfo<'a> {}
+impl Eq for ImportInfo<'_> {}
 
 //Insert/////////////////
 
-impl<'a> Hash for InsertInfo<'a> {
+impl Hash for InsertInfo<'_> {
     fn hash<H: Hasher>(&self, state: &mut H) {
         self.as_name.hash(state);
-        self.in_flow.hash(state)
+        self.in_flow.hash(state);
     }
 }
 
-impl<'a> PartialEq for InsertInfo<'a> {
+impl PartialEq for InsertInfo<'_> {
     fn eq(&self, other: &Self) -> bool {
         self.as_name == other.as_name && self.in_flow == other.in_flow
     }
 }
 
-impl<'a> Eq for InsertInfo<'a> {}
+impl Eq for InsertInfo<'_> {}
 
 ////////////////////////////////////////////////////////////////////////////////
 // PUBLIC FUNCTIONS
 ////////////////////////////////////////////////////////////////////////////////
 
 impl<'a> StepInfo<'a> {
+    #[must_use]
     pub fn new(
         flow: &str,
         step: &str,
@@ -207,6 +206,7 @@ impl<'a> StepInfo<'a> {
 }
 
 impl State {
+    #[must_use]
     pub fn new(in_function: i16) -> Self {
         Self {
             in_function,
@@ -215,15 +215,16 @@ impl State {
     }
 
     pub fn enter_loop(&mut self) {
-        self.loop_scope += 1
+        self.loop_scope += 1;
     }
 
     pub fn exit_loop(&mut self) {
-        self.loop_scope -= 1
+        self.loop_scope -= 1;
     }
 }
 
 impl<'a> LinterInfo<'a> {
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         flow_name: &'a str,
         scope_type: ScopeType,
@@ -239,7 +240,7 @@ impl<'a> LinterInfo<'a> {
         functions_call_list: &'a mut Vec<FunctionCallInfo<'a>>,
         errors: &'a mut Vec<ErrorInfo>,
         warnings: &'a mut Vec<Warnings>,
-        native_components: &'a Option<serde_json::Map<String, serde_json::Value>>,
+        native_components: Option<&'a serde_json::Map<String, serde_json::Value>>,
     ) -> Self {
         Self {
             flow_name,
@@ -247,9 +248,9 @@ impl<'a> LinterInfo<'a> {
             raw_flow,
             goto_list,
             step_list,
-            function_list,
             default_flow,
             bot_constants,
+            function_list,
             import_list,
             insert_list,
             valid_closure_list,
@@ -262,17 +263,11 @@ impl<'a> LinterInfo<'a> {
 }
 
 impl<'a> FunctionInfo<'a> {
-    pub fn new(
-        name: String,
-        in_flow: &'a str,
-        raw_flow: &'a str,
-        interval: Interval,
-        extern_module: bool,
-    ) -> Self {
+    #[must_use]
+    pub fn new(name: String, in_flow: &'a str, interval: Interval, extern_module: bool) -> Self {
         Self {
             name,
             in_flow,
-            raw_flow,
             extern_module,
             interval,
         }
@@ -280,6 +275,7 @@ impl<'a> FunctionInfo<'a> {
 }
 
 impl<'a> FunctionCallInfo<'a> {
+    #[must_use]
     pub fn new(
         name: String,
         in_flow: &'a str,
@@ -300,6 +296,7 @@ impl<'a> FunctionCallInfo<'a> {
 }
 
 impl<'a> ImportInfo<'a> {
+    #[must_use]
     pub fn new(
         as_name: String,
         original_name: Option<String>,
@@ -320,6 +317,7 @@ impl<'a> ImportInfo<'a> {
 }
 
 impl<'a> InsertInfo<'a> {
+    #[must_use]
     pub fn new(
         as_name: String,
         original_name: Option<String>,

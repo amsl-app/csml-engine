@@ -1,8 +1,8 @@
 mod support;
 
+use csml_interpreter::data::Context;
 use csml_interpreter::data::event::Event;
 use csml_interpreter::data::hold::{Hold, IndexInfo};
-use csml_interpreter::data::Context;
 use std::collections::HashMap;
 
 use crate::support::tools::format_message;
@@ -23,7 +23,7 @@ fn hold_test_none() {
     }
     "#;
     let msg = format_message(
-        Event::new("payload", "", serde_json::json!({})),
+        &Event::new("payload", "", serde_json::json!({})),
         Context::new(
             HashMap::new(),
             HashMap::new(),
@@ -39,7 +39,7 @@ fn hold_test_none() {
     let v1: Value = message_to_json_value(msg);
     let v2: Value = serde_json::from_str(data).unwrap();
 
-    assert_eq!(v1, v2)
+    assert_eq!(v1, v2);
 }
 
 #[test]
@@ -56,7 +56,7 @@ fn hold_test_some_0() {
     }
     "#;
     let msg = format_message(
-        Event::new("payload", "", serde_json::json!({})),
+        &Event::new("payload", "", serde_json::json!({})),
         Context::new(
             HashMap::new(),
             HashMap::new(),
@@ -67,8 +67,8 @@ fn hold_test_some_0() {
                     loop_index: vec![],
                 },
                 serde_json::json!({}),
-                "".to_owned(),
-                "".to_owned(),
+                String::new(),
+                String::new(),
                 None,
                 false,
             )),
@@ -82,14 +82,14 @@ fn hold_test_some_0() {
     let v1: Value = message_to_json_value(msg);
     let v2: Value = serde_json::from_str(data).unwrap();
 
-    assert_eq!(v1, v2)
+    assert_eq!(v1, v2);
 }
 
 #[test]
 fn hold_test_some_3() {
     let data = r#"{"memories":[], "messages":[{"content":{"text":"4"}, "content_type":"text"}]}"#;
     let msg = format_message(
-        Event::new("payload", "", serde_json::json!({})),
+        &Event::new("payload", "", serde_json::json!({})),
         Context::new(
             HashMap::new(),
             HashMap::new(),
@@ -100,8 +100,8 @@ fn hold_test_some_3() {
                     loop_index: vec![],
                 },
                 serde_json::json!({}),
-                "".to_owned(),
-                "".to_owned(),
+                String::new(),
+                String::new(),
                 None,
                 false,
             )),
@@ -115,14 +115,14 @@ fn hold_test_some_3() {
     let v1: Value = message_to_json_value(msg);
     let v2: Value = serde_json::from_str(data).unwrap();
 
-    assert_eq!(v1, v2)
+    assert_eq!(v1, v2);
 }
 
 #[test]
 fn hold_test_some_7() {
     let data = r#"{"memories":[], "messages":[]}"#;
     let msg = format_message(
-        Event::new("payload", "", serde_json::json!({})),
+        &Event::new("payload", "", serde_json::json!({})),
         Context::new(
             HashMap::new(),
             HashMap::new(),
@@ -133,8 +133,8 @@ fn hold_test_some_7() {
                     loop_index: vec![],
                 },
                 serde_json::json!({}),
-                "".to_owned(),
-                "".to_owned(),
+                String::new(),
+                String::new(),
                 None,
                 false,
             )),
@@ -148,14 +148,14 @@ fn hold_test_some_7() {
     let v1: Value = message_to_json_value(msg);
     let v2: Value = serde_json::from_str(data).unwrap();
 
-    assert_eq!(v1, v2)
+    assert_eq!(v1, v2);
 }
 
 #[test]
 fn hold_test_some_8() {
     let data = r#"{"memories":[], "messages":[{"content":{"text":"3"}, "content_type":"text"}]}"#;
     let msg = format_message(
-        Event::new("payload", "", serde_json::json!({})),
+        &Event::new("payload", "", serde_json::json!({})),
         Context::new(
             HashMap::new(),
             HashMap::new(),
@@ -166,8 +166,8 @@ fn hold_test_some_8() {
                     loop_index: vec![],
                 },
                 serde_json::json!({}),
-                "".to_owned(),
-                "".to_owned(),
+                String::new(),
+                String::new(),
                 None,
                 false,
             )),
@@ -181,14 +181,14 @@ fn hold_test_some_8() {
     let v1: Value = message_to_json_value(msg);
     let v2: Value = serde_json::from_str(data).unwrap();
 
-    assert_eq!(v1, v2)
+    assert_eq!(v1, v2);
 }
 
 #[test]
 fn hold_test_some_17() {
     let data = r#"{"memories":[], "messages":[]}"#;
     let msg = format_message(
-        Event::new("payload", "", serde_json::json!({})),
+        &Event::new("payload", "", serde_json::json!({})),
         Context::new(
             HashMap::new(),
             HashMap::new(),
@@ -199,8 +199,8 @@ fn hold_test_some_17() {
                     loop_index: vec![],
                 },
                 serde_json::json!({}),
-                "".to_owned(),
-                "".to_owned(),
+                String::new(),
+                String::new(),
                 None,
                 false,
             )),
@@ -214,14 +214,14 @@ fn hold_test_some_17() {
     let v1: Value = message_to_json_value(msg);
     let v2: Value = serde_json::from_str(data).unwrap();
 
-    assert_eq!(v1, v2)
+    assert_eq!(v1, v2);
 }
 
 #[test]
 fn hold_test_step_1_ok() {
     let data = r#"{"memories":[], "messages":[{"content":{"text":"OK"}, "content_type":"text"}] }"#;
     let msg = format_message(
-        Event::new("payload", "", serde_json::json!({})),
+        &Event::new("payload", "", serde_json::json!({})),
         Context::new(
             HashMap::new(),
             HashMap::new(),
@@ -232,8 +232,8 @@ fn hold_test_step_1_ok() {
                     loop_index: vec![],
                 },
                 serde_json::json!({}),
-                "".to_owned(),
-                "".to_owned(),
+                String::new(),
+                String::new(),
                 None,
                 false,
             )),
@@ -247,14 +247,14 @@ fn hold_test_step_1_ok() {
     let v1: Value = message_to_json_value(msg);
     let v2: Value = serde_json::from_str(data).unwrap();
 
-    assert_eq!(v1, v2)
+    assert_eq!(v1, v2);
 }
 
 #[test]
 fn hold_test_step_2_ok() {
     let data = r#"{"memories":[], "messages":[{"content":{"text":"OK"}, "content_type":"text"}] }"#;
     let msg = format_message(
-        Event::new("payload", "", serde_json::json!({})),
+        &Event::new("payload", "", serde_json::json!({})),
         Context::new(
             HashMap::new(),
             HashMap::new(),
@@ -265,8 +265,8 @@ fn hold_test_step_2_ok() {
                     loop_index: vec![],
                 },
                 serde_json::json!({}),
-                "".to_owned(),
-                "".to_owned(),
+                String::new(),
+                String::new(),
                 None,
                 false,
             )),
@@ -280,14 +280,14 @@ fn hold_test_step_2_ok() {
     let v1: Value = message_to_json_value(msg);
     let v2: Value = serde_json::from_str(data).unwrap();
 
-    assert_eq!(v1, v2)
+    assert_eq!(v1, v2);
 }
 
 #[test]
 fn hold_test_step_3_ok() {
     let data = r#"{"memories":[], "messages":[{"content":{"text":"OK"}, "content_type":"text"}] }"#;
     let msg = format_message(
-        Event::new("payload", "", serde_json::json!({})),
+        &Event::new("payload", "", serde_json::json!({})),
         Context::new(
             HashMap::new(),
             HashMap::new(),
@@ -298,8 +298,8 @@ fn hold_test_step_3_ok() {
                     loop_index: vec![],
                 },
                 serde_json::json!({}),
-                "".to_owned(),
-                "".to_owned(),
+                String::new(),
+                String::new(),
                 None,
                 false,
             )),
@@ -313,14 +313,14 @@ fn hold_test_step_3_ok() {
     let v1: Value = message_to_json_value(msg);
     let v2: Value = serde_json::from_str(data).unwrap();
 
-    assert_eq!(v1, v2)
+    assert_eq!(v1, v2);
 }
 
 #[test]
 fn hold_test_step_4_ok() {
     let data = r#"{"memories":[], "messages":[{"content":{"text":"OK"}, "content_type":"text"}] }"#;
     let msg = format_message(
-        Event::new("payload", "", serde_json::json!({})),
+        &Event::new("payload", "", serde_json::json!({})),
         Context::new(
             HashMap::new(),
             HashMap::new(),
@@ -331,8 +331,8 @@ fn hold_test_step_4_ok() {
                     loop_index: vec![],
                 },
                 serde_json::json!({}),
-                "".to_owned(),
-                "".to_owned(),
+                String::new(),
+                String::new(),
                 None,
                 false,
             )),
@@ -346,5 +346,5 @@ fn hold_test_step_4_ok() {
     let v1: Value = message_to_json_value(msg);
     let v2: Value = serde_json::from_str(data).unwrap();
 
-    assert_eq!(v1, v2)
+    assert_eq!(v1, v2);
 }

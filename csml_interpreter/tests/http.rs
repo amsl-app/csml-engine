@@ -44,7 +44,7 @@ fn http_http_0() {
             }
         ]}"#;
     let msg = format_message(
-        Event::new("payload", "", serde_json::json!({})),
+        &Event::new("payload", "", serde_json::json!({})),
         Context::new(
             HashMap::new(),
             HashMap::new(),
@@ -60,7 +60,7 @@ fn http_http_0() {
     let v1: Value = message_to_json_value(msg);
     let v2: Value = serde_json::from_str(data).unwrap();
 
-    assert_eq!(v1, v2)
+    assert_eq!(v1, v2);
 }
 
 #[test]
@@ -98,7 +98,7 @@ fn http_get_0() {
             }
         ]}"#;
     let msg = format_message(
-        Event::new("payload", "", serde_json::json!({})),
+        &Event::new("payload", "", serde_json::json!({})),
         Context::new(
             HashMap::new(),
             HashMap::new(),
@@ -114,7 +114,7 @@ fn http_get_0() {
     let v1: Value = message_to_json_value(msg);
     let v2: Value = serde_json::from_str(data).unwrap();
 
-    assert_eq!(v1, v2)
+    assert_eq!(v1, v2);
 }
 
 #[test]
@@ -164,7 +164,7 @@ fn http_set_0() {
             }
         ]}"#;
     let msg = format_message(
-        Event::new("payload", "", serde_json::json!({})),
+        &Event::new("payload", "", serde_json::json!({})),
         Context::new(
             HashMap::new(),
             HashMap::new(),
@@ -180,7 +180,7 @@ fn http_set_0() {
     let v1: Value = message_to_json_value(msg);
     let v2: Value = serde_json::from_str(data).unwrap();
 
-    assert_eq!(v1, v2)
+    assert_eq!(v1, v2);
 }
 
 #[test]
@@ -233,7 +233,7 @@ fn http_query_0() {
             }
         ]}"#;
     let msg = format_message(
-        Event::new("payload", "", serde_json::json!({})),
+        &Event::new("payload", "", serde_json::json!({})),
         Context::new(
             HashMap::new(),
             HashMap::new(),
@@ -249,7 +249,7 @@ fn http_query_0() {
     let v1: Value = message_to_json_value(msg);
     let v2: Value = serde_json::from_str(data).unwrap();
 
-    assert_eq!(v1, v2)
+    assert_eq!(v1, v2);
 }
 
 #[test]
@@ -299,7 +299,7 @@ fn http_delete_0() {
             }
         ]}"#;
     let msg = format_message(
-        Event::new("payload", "", serde_json::json!({})),
+        &Event::new("payload", "", serde_json::json!({})),
         Context::new(
             HashMap::new(),
             HashMap::new(),
@@ -315,7 +315,7 @@ fn http_delete_0() {
     let v1: Value = message_to_json_value(msg);
     let v2: Value = serde_json::from_str(data).unwrap();
 
-    assert_eq!(v1, v2)
+    assert_eq!(v1, v2);
 }
 
 #[test]
@@ -368,7 +368,7 @@ fn http_put_0() {
             }
         ]}"#;
     let msg = format_message(
-        Event::new("payload", "", serde_json::json!({})),
+        &Event::new("payload", "", serde_json::json!({})),
         Context::new(
             HashMap::new(),
             HashMap::new(),
@@ -384,7 +384,7 @@ fn http_put_0() {
     let v1: Value = message_to_json_value(msg);
     let v2: Value = serde_json::from_str(data).unwrap();
 
-    assert_eq!(v1, v2)
+    assert_eq!(v1, v2);
 }
 
 #[test]
@@ -437,7 +437,7 @@ fn http_patch_0() {
             }
         ]}"#;
     let msg = format_message(
-        Event::new("payload", "", serde_json::json!({})),
+        &Event::new("payload", "", serde_json::json!({})),
         Context::new(
             HashMap::new(),
             HashMap::new(),
@@ -453,7 +453,7 @@ fn http_patch_0() {
     let v1: Value = message_to_json_value(msg);
     let v2: Value = serde_json::from_str(data).unwrap();
 
-    assert_eq!(v1, v2)
+    assert_eq!(v1, v2);
 }
 
 #[test]
@@ -506,7 +506,7 @@ fn http_post_0() {
             }
         ]}"#;
     let msg = format_message(
-        Event::new("payload", "", serde_json::json!({})),
+        &Event::new("payload", "", serde_json::json!({})),
         Context::new(
             HashMap::new(),
             HashMap::new(),
@@ -522,7 +522,7 @@ fn http_post_0() {
     let v1: Value = message_to_json_value(msg);
     let v2: Value = serde_json::from_str(data).unwrap();
 
-    assert_eq!(v1, v2)
+    assert_eq!(v1, v2);
 }
 
 #[test]
@@ -545,7 +545,7 @@ fn http_auth_0() {
             }
         ]}"#;
     let msg = format_message(
-        Event::new("payload", "", serde_json::json!({})),
+        &Event::new("payload", "", serde_json::json!({})),
         Context::new(
             HashMap::new(),
             HashMap::new(),
@@ -561,5 +561,5 @@ fn http_auth_0() {
     let v1: Value = message_to_json_value(msg);
     let v2: Value = serde_json::from_str(data).unwrap();
 
-    assert_eq!(v1, v2)
+    assert_eq!(v1, v2);
 }

@@ -4,19 +4,24 @@ use crate::data::primitive::boolean::PrimitiveBoolean;
 use crate::data::primitive::string::PrimitiveString;
 use crate::data::{literal, literal::ContentType};
 
-use crate::data::primitive::Right;
+use crate::data::primitive::utils::{
+    illegal_math_ops, impl_do_exec, impl_type_check, require_n_args,
+};
 use crate::data::primitive::{Primitive, PrimitiveType};
+use crate::data::primitive::{Right, common};
 use crate::data::{
+    Data, Literal, MSG, MemoryType, MessageData,
     ast::{Expr, Interval},
     message::Message,
-    Data, Literal, MemoryType, MessageData, MSG,
 };
-use crate::error_format::*;
+use crate::error_format::{ERROR_CLOSURE_UNKNOWN_METHOD, gen_error_info};
 use phf::phf_map;
 use serde::{Deserialize, Serialize};
+use std::any::Any;
 use std::cmp::Ordering;
 use std::{collections::HashMap, sync::mpsc};
 
+#[allow(clippy::implicit_hasher)]
 pub fn capture_variables(
     literal: &mut Literal,
     memories: HashMap<String, Literal>,
@@ -43,15 +48,15 @@ const FUNCTIONS: phf::Map<&'static str, (PrimitiveMethod, Right)> = phf_map! {
     "is_int" => (PrimitiveClosure::is_int as PrimitiveMethod, Right::Read),
     "is_float" => (PrimitiveClosure::is_float as PrimitiveMethod, Right::Read),
     "type_of" => (PrimitiveClosure::type_of as PrimitiveMethod, Right::Read),
-    "is_error" => (PrimitiveClosure::is_error as PrimitiveMethod, Right::Read),
+    "is_error" => ((|_, _, additional_info, _, interval| common::is_error(additional_info, interval)) as PrimitiveMethod, Right::Read),
     "get_info" => (PrimitiveClosure::get_info as PrimitiveMethod, Right::Read),
     "to_string" => (PrimitiveClosure::to_string as PrimitiveMethod, Right::Read),
 };
 
 type PrimitiveMethod = fn(
     int: &mut PrimitiveClosure,
-    args: &HashMap<String, Literal>,
-    additional_info: &Option<HashMap<String, Literal>>,
+    args: HashMap<String, Literal>,
+    additional_info: Option<&HashMap<String, Literal>>,
     data: &mut Data,
     interval: Interval,
 ) -> Result<Literal, ErrorInfo>;
@@ -68,122 +73,43 @@ pub struct PrimitiveClosure {
 ////////////////////////////////////////////////////////////////////////////////
 
 impl PrimitiveClosure {
-    fn is_number(
-        _int: &mut PrimitiveClosure,
-        args: &HashMap<String, Literal>,
-        _additional_info: &Option<HashMap<String, Literal>>,
-        data: &mut Data,
-        interval: Interval,
-    ) -> Result<Literal, ErrorInfo> {
-        let usage = "is_number() => boolean";
+    impl_type_check!(&mut Self, is_number, false);
+    impl_type_check!(&mut Self, is_int, false);
+    impl_type_check!(&mut Self, is_float, false);
 
-        if !args.is_empty() {
-            return Err(gen_error_info(
-                Position::new(interval, &data.context.flow),
-                format!("usage: {}", usage),
-            ));
-        }
-
-        Ok(PrimitiveBoolean::get_literal(false, interval))
-    }
-
-    fn is_int(
-        _int: &mut PrimitiveClosure,
-        args: &HashMap<String, Literal>,
-        _additional_info: &Option<HashMap<String, Literal>>,
-        data: &mut Data,
-        interval: Interval,
-    ) -> Result<Literal, ErrorInfo> {
-        let usage = "is_int() => boolean";
-
-        if !args.is_empty() {
-            return Err(gen_error_info(
-                Position::new(interval, &data.context.flow),
-                format!("usage: {}", usage),
-            ));
-        }
-
-        Ok(PrimitiveBoolean::get_literal(false, interval))
-    }
-
-    fn is_float(
-        _int: &mut PrimitiveClosure,
-        args: &HashMap<String, Literal>,
-        _additional_info: &Option<HashMap<String, Literal>>,
-        data: &mut Data,
-        interval: Interval,
-    ) -> Result<Literal, ErrorInfo> {
-        let usage = "is_float() => boolean";
-
-        if !args.is_empty() {
-            return Err(gen_error_info(
-                Position::new(interval, &data.context.flow),
-                format!("usage: {}", usage),
-            ));
-        }
-
-        Ok(PrimitiveBoolean::get_literal(false, interval))
-    }
-
+    #[allow(clippy::needless_pass_by_value)]
     fn type_of(
-        _int: &mut PrimitiveClosure,
-        args: &HashMap<String, Literal>,
-        _additional_info: &Option<HashMap<String, Literal>>,
+        _int: &mut Self,
+        args: HashMap<String, Literal>,
+        _additional_info: Option<&HashMap<String, Literal>>,
         data: &mut Data,
         interval: Interval,
     ) -> Result<Literal, ErrorInfo> {
-        let usage = "type_of() => string";
-
-        if !args.is_empty() {
-            return Err(gen_error_info(
-                Position::new(interval, &data.context.flow),
-                format!("usage: {}", usage),
-            ));
-        }
+        require_n_args(0, &args, interval, data, "type_of() => string")?;
 
         Ok(PrimitiveString::get_literal("closure", interval))
     }
 
+    #[allow(clippy::needless_pass_by_value)]
     fn get_info(
-        _closure: &mut PrimitiveClosure,
-        args: &HashMap<String, Literal>,
-        additional_info: &Option<HashMap<String, Literal>>,
+        _closure: &mut Self,
+        args: HashMap<String, Literal>,
+        additional_info: Option<&HashMap<String, Literal>>,
         data: &mut Data,
         interval: Interval,
     ) -> Result<Literal, ErrorInfo> {
-        literal::get_info(args, additional_info, interval, data)
+        literal::get_info(&args, additional_info, interval, data)
     }
 
-    fn is_error(
-        _closure: &mut PrimitiveClosure,
-        _args: &HashMap<String, Literal>,
-        additional_info: &Option<HashMap<String, Literal>>,
-        _data: &mut Data,
-        interval: Interval,
-    ) -> Result<Literal, ErrorInfo> {
-        match additional_info {
-            Some(map) if map.contains_key("error") => {
-                Ok(PrimitiveBoolean::get_literal(true, interval))
-            }
-            _ => Ok(PrimitiveBoolean::get_literal(false, interval)),
-        }
-    }
-
+    #[allow(clippy::needless_pass_by_value)]
     fn to_string(
-        closure: &mut PrimitiveClosure,
-        args: &HashMap<String, Literal>,
-        _additional_info: &Option<HashMap<String, Literal>>,
+        closure: &mut Self,
+        args: HashMap<String, Literal>,
+        _additional_info: Option<&HashMap<String, Literal>>,
         data: &mut Data,
         interval: Interval,
     ) -> Result<Literal, ErrorInfo> {
-        let usage = "to_string() => string";
-
-        if !args.is_empty() {
-            return Err(gen_error_info(
-                Position::new(interval, &data.context.flow),
-                format!("usage: {}", usage),
-            ));
-        }
+        require_n_args(0, &args, interval, data, "to_string() => string")?;
 
         Ok(PrimitiveString::get_literal(&closure.to_string(), interval))
     }
@@ -194,6 +120,7 @@ impl PrimitiveClosure {
 ////////////////////////////////////////////////////////////////////////////////
 
 impl PrimitiveClosure {
+    #[must_use]
     pub fn new(
         args: Vec<String>,
         func: Box<Expr>,
@@ -206,13 +133,14 @@ impl PrimitiveClosure {
         }
     }
 
+    #[must_use]
     pub fn get_literal(
         args: Vec<String>,
         func: Box<Expr>,
         interval: Interval,
         enclosed_variables: Option<HashMap<String, Literal>>,
     ) -> Literal {
-        let primitive = Box::new(PrimitiveClosure::new(args, func, enclosed_variables));
+        let primitive = Box::new(Self::new(args, func, enclosed_variables));
 
         Literal {
             content_type: "closure".to_owned(),
@@ -238,56 +166,21 @@ impl Primitive for PrimitiveClosure {
         None
     }
 
-    fn do_add(&self, other: &dyn Primitive) -> Result<Box<dyn Primitive>, String> {
-        Err(format!(
-            "{} {:?} + {:?}",
-            ERROR_ILLEGAL_OPERATION,
-            self.get_type(),
-            other.get_type()
-        ))
-    }
-
-    fn do_sub(&self, other: &dyn Primitive) -> Result<Box<dyn Primitive>, String> {
-        Err(format!(
-            "{} {:?} - {:?}",
-            ERROR_ILLEGAL_OPERATION,
-            self.get_type(),
-            other.get_type()
-        ))
-    }
-
-    fn do_div(&self, other: &dyn Primitive) -> Result<Box<dyn Primitive>, String> {
-        Err(format!(
-            "{} {:?} / {:?}",
-            ERROR_ILLEGAL_OPERATION,
-            self.get_type(),
-            other.get_type()
-        ))
-    }
-
-    fn do_mul(&self, other: &dyn Primitive) -> Result<Box<dyn Primitive>, String> {
-        Err(format!(
-            "{} {:?} * {:?}",
-            ERROR_ILLEGAL_OPERATION,
-            self.get_type(),
-            other.get_type()
-        ))
-    }
-
-    fn do_rem(&self, other: &dyn Primitive) -> Result<Box<dyn Primitive>, String> {
-        Err(format!(
-            "{} {:?} % {:?}",
-            ERROR_ILLEGAL_OPERATION,
-            self.get_type(),
-            other.get_type()
-        ))
-    }
+    illegal_math_ops!();
 
     fn as_debug(&self) -> &dyn std::fmt::Debug {
         self
     }
 
-    fn as_any(&self) -> &dyn std::any::Any {
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+
+    fn into_value(self: Box<Self>) -> Box<dyn Any> {
+        self
+    }
+
+    fn into_any(self: Box<Self>) -> Box<dyn Any> {
         self
     }
 
@@ -317,7 +210,7 @@ impl Primitive for PrimitiveClosure {
         false
     }
 
-    fn get_value(&self) -> &dyn std::any::Any {
+    fn get_value(&self) -> &dyn Any {
         self
     }
 
@@ -336,34 +229,5 @@ impl Primitive for PrimitiveClosure {
         }
     }
 
-    fn do_exec(
-        &mut self,
-        name: &str,
-        args: &HashMap<String, Literal>,
-        mem_type: &MemoryType,
-        additional_info: &Option<HashMap<String, Literal>>,
-        interval: Interval,
-        _content_type: &ContentType,
-        data: &mut Data,
-        _msg_data: &mut MessageData,
-        _sender: &Option<mpsc::Sender<MSG>>,
-    ) -> Result<(Literal, Right), ErrorInfo> {
-        if let Some((f, right)) = FUNCTIONS.get(name) {
-            if *mem_type == MemoryType::Constant && *right == Right::Write {
-                return Err(gen_error_info(
-                    Position::new(interval, &data.context.flow),
-                    ERROR_CONSTANT_MUTABLE_FUNCTION.to_string(),
-                ));
-            } else {
-                let res = f(self, args, additional_info, data, interval)?;
-
-                return Ok((res, *right));
-            }
-        }
-
-        Err(gen_error_info(
-            Position::new(interval, &data.context.flow),
-            format!("[{}] {}", name, ERROR_CLOSURE_UNKNOWN_METHOD),
-        ))
-    }
+    impl_do_exec!(FUNCTIONS, ERROR_CLOSURE_UNKNOWN_METHOD);
 }

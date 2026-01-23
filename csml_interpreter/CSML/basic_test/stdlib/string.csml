@@ -88,6 +88,12 @@ step_11:
 
 step_12_slice:
     say "Hello World".slice(0, 3)
+    say "Hello World".slice(-2)
+    goto end
+
+step_12b_slice_error:
+    say "Hello World".slice()
+    say "Hello World".slice(1, 2, 3)
     goto end
 
 step_13_to_string:

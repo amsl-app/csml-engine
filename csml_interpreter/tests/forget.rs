@@ -1,7 +1,7 @@
 mod support;
 
 use csml_interpreter::data::context::Context;
-use csml_interpreter::data::{event::Event, primitive::PrimitiveInt, Interval};
+use csml_interpreter::data::{Interval, event::Event, primitive::PrimitiveInt};
 use std::collections::HashMap;
 
 use crate::support::tools::format_message;
@@ -22,7 +22,7 @@ fn forget_all() {
     );
 
     let msg = format_message(
-        Event::new("payload", "", serde_json::json!({})),
+        &Event::new("payload", "", serde_json::json!({})),
         Context::new(
             HashMap::new(),
             metadata,
@@ -37,7 +37,7 @@ fn forget_all() {
 
     let v1: Value = message_to_json_value(msg);
     let v2: Value = serde_json::from_str(data).unwrap();
-    assert_eq!(v1, v2)
+    assert_eq!(v1, v2);
 }
 
 #[test]
@@ -56,7 +56,7 @@ fn forget_single() {
     );
 
     let msg = format_message(
-        Event::new("payload", "", serde_json::json!({})),
+        &Event::new("payload", "", serde_json::json!({})),
         Context::new(
             HashMap::new(),
             metadata,
@@ -72,7 +72,7 @@ fn forget_single() {
     let v1: Value = message_to_json_value(msg);
     let v2: Value = serde_json::from_str(data).unwrap();
 
-    assert_eq!(v1, v2)
+    assert_eq!(v1, v2);
 }
 
 #[test]
@@ -88,7 +88,7 @@ fn forget_list() {
     );
 
     let msg = format_message(
-        Event::new("payload", "", serde_json::json!({})),
+        &Event::new("payload", "", serde_json::json!({})),
         Context::new(
             HashMap::new(),
             metadata,
@@ -103,5 +103,5 @@ fn forget_list() {
 
     let v1: Value = message_to_json_value(msg);
     let v2: Value = serde_json::from_str(data).unwrap();
-    assert_eq!(v1, v2)
+    assert_eq!(v1, v2);
 }

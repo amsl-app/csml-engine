@@ -1,9 +1,12 @@
 use crate::data::error_info::ErrorInfo;
 use crate::data::position::Position;
 use crate::data::{
-    ast::*, primitive::PrimitiveNull, warnings::DisplayWarnings, Data, Literal, MessageData, MSG,
+    Data, Literal, MSG, MessageData,
+    ast::{Block, BlockType, Expr, ObjectType},
+    primitive::PrimitiveNull,
+    warnings::DisplayWarnings,
 };
-use crate::error_format::*;
+use crate::error_format::{ERROR_START_INSTRUCTIONS, gen_error_info};
 use crate::interpreter::{
     ast_interpreter::{for_loop, match_actions, solve_if_statement, while_loop},
     variable_handler::{expr_to_literal, interval::interval_from_expr},
@@ -11,23 +14,19 @@ use crate::interpreter::{
 use crate::parser::ExitCondition;
 use std::sync::mpsc;
 
-////////////////////////////////////////////////////////////////////////////////
-// PRIVATE FUNCTIONS
-////////////////////////////////////////////////////////////////////////////////
-
 fn interpret_function_scope(
     actions: &Block,
     data: &mut Data,
-    sender: &Option<mpsc::Sender<MSG>>,
+    sender: Option<&mpsc::Sender<MSG>>,
 ) -> Result<MessageData, ErrorInfo> {
     let mut message_data = MessageData::default();
 
-    for (action, instruction_info) in actions.commands.iter() {
+    for (action, instruction_info) in &actions.commands {
         match action {
             Expr::ObjectExpr(ObjectType::Return(var)) => {
                 let lit = expr_to_literal(
                     var,
-                    &DisplayWarnings::On,
+                    DisplayWarnings::On,
                     None,
                     data,
                     &mut message_data,
@@ -38,15 +37,24 @@ fn interpret_function_scope(
                 return Ok(message_data);
             }
             Expr::ObjectExpr(fun) => message_data = match_actions(fun, message_data, data, sender)?,
-            Expr::IfExpr(ref if_statement) => {
+            Expr::IfExpr(if_statement) => {
                 message_data =
                     solve_if_statement(if_statement, message_data, data, instruction_info, sender)?;
             }
             Expr::ForEachExpr(ident, i, expr, block, range) => {
-                message_data = for_loop(ident, i, expr, block, range, message_data, data, sender)?
+                message_data = for_loop(
+                    ident,
+                    i.as_ref(),
+                    expr,
+                    block,
+                    range,
+                    message_data,
+                    data,
+                    sender,
+                )?;
             }
             Expr::WhileExpr(expr, block, range) => {
-                message_data = while_loop(expr, block, range, message_data, data, sender)?
+                message_data = while_loop(expr, block, range, message_data, data, sender)?;
             }
             e => {
                 return Err(gen_error_info(
@@ -54,7 +62,7 @@ fn interpret_function_scope(
                     ERROR_START_INSTRUCTIONS.to_owned(),
                 ));
             }
-        };
+        }
 
         if let Some(ExitCondition::Return(_)) = &message_data.exit_condition {
             return Ok(message_data);
@@ -64,25 +72,21 @@ fn interpret_function_scope(
     Ok(message_data)
 }
 
-////////////////////////////////////////////////////////////////////////////////
-// PUBLIC FUNCTION
-////////////////////////////////////////////////////////////////////////////////
-
-pub fn exec_fn_in_new_scope(
+pub(crate) fn exec_fn_in_new_scope(
     expr: &Expr,
     new_scope_data: &mut Data,
     msg_data: &mut MessageData,
-    sender: &Option<mpsc::Sender<MSG>>,
+    sender: Option<&mpsc::Sender<MSG>>,
 ) -> Result<Literal, ErrorInfo> {
     match expr {
         Expr::Scope {
             block_type: BlockType::Function,
             scope,
-            range: interal,
+            range: interval,
         } => {
             let fn_msg_data = interpret_function_scope(scope, new_scope_data, sender)?;
 
-            let mut return_value = PrimitiveNull::get_literal(interal.to_owned());
+            let mut return_value = PrimitiveNull::get_literal(*interval);
             if let Some(ExitCondition::Return(lit)) = fn_msg_data.exit_condition {
                 return_value = lit;
             }

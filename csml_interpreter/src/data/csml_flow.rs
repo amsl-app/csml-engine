@@ -17,6 +17,7 @@ pub struct CsmlFlow {
 ////////////////////////////////////////////////////////////////////////////////
 
 impl CsmlFlow {
+    #[must_use]
     pub fn new(id: &str, name: &str, content: &str, commands: Vec<String>) -> Self {
         Self {
             id: id.to_owned(),

@@ -36,6 +36,7 @@ impl Default for Event {
 ////////////////////////////////////////////////////////////////////////////////
 
 impl Event {
+    #[must_use]
     pub fn new(content_type: &str, content_value: &str, content: serde_json::Value) -> Self {
         Self {
             content_type: content_type.to_owned(),

@@ -12,7 +12,7 @@ use serde_json::Value;
 #[test]
 fn ok_random() {
     let msg = format_message(
-        Event::new("payload", "", serde_json::json!({})),
+        &Event::new("payload", "", serde_json::json!({})),
         Context::new(
             HashMap::new(),
             HashMap::new(),
@@ -33,7 +33,5 @@ fn ok_random() {
         .parse::<f64>()
         .unwrap();
 
-    if float < 0.0 || float > 1.0 {
-        panic!("Random fail {}", float);
-    }
+    assert!((0.0..=1.0).contains(&float), "Random fail {float}");
 }

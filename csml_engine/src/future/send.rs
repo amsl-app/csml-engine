@@ -1,4 +1,4 @@
-use crate::data::AsyncConversationInfo;
+use crate::data::ConversationInfo;
 
 async fn format_and_transfer(callback_url: &str, msg: serde_json::Value) {
     let mut request = reqwest::Client::new().post(callback_url);
@@ -15,14 +15,13 @@ async fn format_and_transfer(callback_url: &str, msg: serde_json::Value) {
 }
 
 /**
- * If a callback_url is defined, we must send each message to its endpoint as it comes.
- * Otherwise, just continue!
+ * If a `callback_url` is defined, we must send each message to its endpoint as it comes.
+ * Otherwise, continue!
  */
-pub async fn send_to_callback_url(c_info: &mut AsyncConversationInfo<'_>, msg: serde_json::Value) {
-    let callback_url = match &c_info.callback_url {
-        Some(callback_url) => callback_url,
-        None => return,
+pub async fn send_to_callback_url(c_info: &mut ConversationInfo, msg: serde_json::Value) {
+    let Some(callback_url) = &c_info.callback_url else {
+        return;
     };
 
-    format_and_transfer(callback_url, msg).await
+    format_and_transfer(callback_url, msg).await;
 }

@@ -8,8 +8,8 @@ use serde::{Deserialize, Serialize};
 
 pub const WARNING_FN: &str =
     "'Fn()' will soon be deprecated. Please use the 'App()' keyword instead";
-pub const WARNING_OBJECT: & str = "'Object(key = value)' will be soon a deprecated Macro please use '{key: value}' instead; https://docs.csml.dev/automatic-type-inference/literals-objects-arrays";
-pub const WARNING_USE: & str = "use will be soon a deprecated keyword please use 'do' instead. https://docs.csml.dev/memory/temporary-and-long-term-variables";
+pub const WARNING_OBJECT: &str = "'Object(key = value)' will be soon a deprecated Macro please use '{key: value}' instead; https://docs.csml.dev/automatic-type-inference/literals-objects-arrays";
+pub const WARNING_USE: &str = "use will be soon a deprecated keyword please use 'do' instead. https://docs.csml.dev/memory/temporary-and-long-term-variables";
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Warnings {
@@ -17,7 +17,7 @@ pub struct Warnings {
     pub position: Position,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Copy)]
 pub enum DisplayWarnings {
     On,
     Off,
@@ -28,6 +28,7 @@ pub enum DisplayWarnings {
 ////////////////////////////////////////////////////////////////////////////////
 
 impl Warnings {
+    #[must_use]
     pub fn new(flow_name: &str, interval: Interval, message: &'static str) -> Self {
         Self {
             message: message.to_owned(),

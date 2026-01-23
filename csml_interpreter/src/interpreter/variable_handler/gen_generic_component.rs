@@ -5,6 +5,7 @@ use crate::data::{ArgsType, Interval, Literal};
 use crate::interpreter::json_to_literal;
 
 use nom::lib::std::collections::HashMap;
+use num_traits::ToPrimitive;
 use std::collections::HashSet;
 
 ////////////////////////////////////////////////////////////////////////////////
@@ -24,12 +25,12 @@ trait ArithmeticOperation {
 impl ArithmeticOperation for serde_json::Value {
     fn get_type(value: &serde_json::Value) -> String {
         match value {
-            serde_json::Value::Null => "Null".to_string(),
-            serde_json::Value::Bool(_) => String::from("Bool"),
-            serde_json::Value::Number(_) => String::from("Number"),
-            serde_json::Value::String(_) => String::from("String"),
-            serde_json::Value::Array(_) => String::from("Array"),
-            serde_json::Value::Object(_) => String::from("Object"),
+            Self::Null => "Null".to_string(),
+            Self::Bool(_) => String::from("Bool"),
+            Self::Number(_) => String::from("Number"),
+            Self::String(_) => String::from("String"),
+            Self::Array(_) => String::from("Array"),
+            Self::Object(_) => String::from("Object"),
         }
     }
 
@@ -40,45 +41,24 @@ impl ArithmeticOperation for serde_json::Value {
         interval: &Interval,
     ) -> Result<serde_json::Value, ErrorInfo> {
         match (lhs, rhs) {
-            (serde_json::Value::Null, serde_json::Value::Null) => Ok(serde_json::Value::Null),
-            (serde_json::Value::Bool(lhs), serde_json::Value::Bool(rhs)) => {
-                Ok(serde_json::Value::Bool(lhs | rhs))
-            }
-            (serde_json::Value::Number(lhs), serde_json::Value::Number(rhs)) => {
-                if let (Some(lhs), Some(rhs)) = (lhs.as_i64(), rhs.as_i64()) {
-                    if let Some(value) = lhs.checked_add(rhs) {
-                        return Ok(serde_json::Value::Number(serde_json::Number::from(value)));
-                    }
+            (Self::Null, Self::Null) => Ok(Self::Null),
+            (Self::Bool(lhs), Self::Bool(rhs)) => Ok(Self::Bool(lhs | rhs)),
+            (Self::Number(lhs), Self::Number(rhs)) => {
+                if let (Some(lhs), Some(rhs)) = (lhs.as_i64(), rhs.as_i64())
+                    && let Some(value) = lhs.checked_add(rhs)
+                {
+                    return Ok(Self::Number(serde_json::Number::from(value)));
                 }
 
                 if let (Some(lhs), Some(rhs)) = (lhs.as_f64(), rhs.as_f64()) {
-                    let a = lhs as i64;
-                    let b = rhs as i64;
+                    let a = lhs.to_i64();
+                    let b = rhs.to_i64();
 
-                    if a.checked_add(b).is_some() {
-                        if let Some(value) = serde_json::Number::from_f64(lhs + rhs) {
-                            return Ok(serde_json::Value::Number(value));
-                        }
-                    }
-                }
-
-                if let (Some(lhs), Some(rhs)) = (lhs.as_i64(), rhs.as_f64()) {
-                    let b = rhs as i64;
-
-                    if lhs.checked_add(b).is_some() {
-                        if let Some(value) = serde_json::Number::from_f64(lhs as f64 + rhs) {
-                            return Ok(serde_json::Value::Number(value));
-                        }
-                    }
-                }
-
-                if let (Some(lhs), Some(rhs)) = (lhs.as_f64(), rhs.as_i64()) {
-                    let a = lhs as i64;
-
-                    if a.checked_add(rhs).is_some() {
-                        if let Some(value) = serde_json::Number::from_f64(lhs + rhs as f64) {
-                            return Ok(serde_json::Value::Number(value));
-                        }
+                    if let (Some(a), Some(b)) = (a, b)
+                        && a.checked_add(b).is_some()
+                        && let Some(value) = serde_json::Number::from_f64(lhs + rhs)
+                    {
+                        return Ok(Self::Number(value));
                     }
                 }
 
@@ -87,43 +67,41 @@ impl ArithmeticOperation for serde_json::Value {
                     "Illegal operation: overflow".to_string(),
                 ))
             }
-            (serde_json::Value::String(lhs), serde_json::Value::String(rhs)) => {
-                Ok(serde_json::Value::String(lhs.to_string() + rhs))
+            (Self::String(lhs), Self::String(rhs)) => Ok(Self::String(lhs.clone() + rhs)),
+            (Self::Array(lhs), Self::Array(rhs)) => {
+                let mut lhs = lhs.clone();
+
+                lhs.extend(rhs.clone());
+
+                Ok(Self::Array(lhs))
             }
-            (serde_json::Value::Array(lhs), serde_json::Value::Array(rhs)) => {
-                let mut lhs = lhs.to_owned();
+            (Self::Object(lhs), Self::Object(rhs)) => {
+                let mut lhs = lhs.clone();
 
-                lhs.extend(rhs.to_owned());
+                lhs.extend(rhs.clone());
 
-                Ok(serde_json::Value::Array(lhs))
+                Ok(Self::Object(lhs))
             }
-            (serde_json::Value::Object(lhs), serde_json::Value::Object(rhs)) => {
-                let mut lhs = lhs.to_owned();
+            (Self::String(lhs), Self::Array(rhs)) => {
+                let mut rhs = rhs.clone();
 
-                lhs.extend(rhs.to_owned());
+                rhs.push(Self::String(lhs.clone()));
 
-                Ok(serde_json::Value::Object(lhs))
+                Ok(Self::Array(rhs))
             }
-            (serde_json::Value::String(lhs), serde_json::Value::Array(rhs)) => {
-                let mut rhs = rhs.to_owned();
+            (Self::Array(lhs), Self::String(rhs)) => {
+                let mut lhs = lhs.clone();
 
-                rhs.push(serde_json::Value::String(lhs.to_owned()));
+                lhs.push(Self::String(rhs.clone()));
 
-                Ok(serde_json::Value::Array(rhs))
-            }
-            (serde_json::Value::Array(lhs), serde_json::Value::String(rhs)) => {
-                let mut lhs = lhs.to_owned();
-
-                lhs.push(serde_json::Value::String(rhs.to_owned()));
-
-                Ok(serde_json::Value::Array(lhs))
+                Ok(Self::Array(lhs))
             }
             (_, _) => Err(ErrorInfo::new(
                 Position::new(*interval, flow_name),
                 format!(
                     "Type Error expecting {} type but {} type was found",
-                    serde_json::Value::get_type(rhs),
-                    serde_json::Value::get_type(lhs),
+                    Self::get_type(rhs),
+                    Self::get_type(lhs),
                 ),
             )),
         }
@@ -149,7 +127,7 @@ fn create_default_object(
             "Object" => Ok(serde_json::Value::Object(serde_json::Map::default())),
             _ => Err(ErrorInfo::new(
                 Position::new(*interval, flow_name),
-                format!("type '{}' is unknown", result),
+                format!("type '{result}' is unknown"),
             )),
         };
     }
@@ -214,11 +192,7 @@ fn actions_exist(object: &serde_json::Map<String, serde_json::Value>) -> Option<
         },
         (None, Some(value)) | (Some(value), None) => {
             if let Some(value) = value.as_array() {
-                if value.is_empty() {
-                    None
-                } else {
-                    Some(())
-                }
+                if value.is_empty() { None } else { Some(()) }
             } else {
                 Some(())
             }
@@ -234,13 +208,13 @@ fn actions_exist(object: &serde_json::Map<String, serde_json::Value>) -> Option<
 fn get_result(
     name: &str,
     is_custom_component: bool,
-    hashmap: &HashMap<String, Literal>,
+    hashmap: HashMap<String, Literal>,
     interval: Interval,
 ) -> Literal {
     if name.to_lowercase() == "text" {
         // only for text component reformat the literal
 
-        let mut result = hashmap.get("text").unwrap().to_owned();
+        let mut result = hashmap.get("text").unwrap().clone();
         result.set_content_type(&name.to_lowercase());
 
         result
@@ -257,6 +231,7 @@ fn get_result(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn get_default_object(
     key: &str,
     object: &serde_json::Map<String, serde_json::Value>,
@@ -268,43 +243,39 @@ fn get_default_object(
     recursion: &mut HashSet<String>,
 ) -> Result<serde_json::Value, ErrorInfo> {
     // Create a default JSON value to be able to abstract all JSON types (STRING, OBJECT) and then apply the trait add to it.
-    // Apply all rules if found of $_get and $_set, then launch recursion with key as the name of dependency.
+    // Apply all rules if found of $_get and $_set, then launch recursion with a key as the name of dependency.
     // Eliminates circular dependencies by checking if we already visited this key
-    // Eliminates recurrent recursion if object has already been created once.
+    // Eliminates recurrent recursion if an object has already been created once.
 
     let mut result = create_default_object(object, flow_name, interval)?;
 
     if let Some(serde_json::Value::Array(default_value)) = object.get(key) {
-        for function in default_value.iter() {
+        for function in default_value {
             if let serde_json::Value::Object(function) = function {
                 if let Some(serde_json::Value::String(dependency)) = function.get("$_get") {
-                    match memoization.get(dependency) {
-                        Some(value) => {
-                            result = serde_json::Value::add(flow_name, &result, value, interval)?;
+                    if let Some(value) = memoization.get(dependency) {
+                        result = serde_json::Value::add(flow_name, &result, value, interval)?;
+                    } else {
+                        if recursion.contains(dependency) {
+                            return Err(ErrorInfo::new(
+                                Position::new(*interval, flow_name),
+                                "GENERIC_COMPONENT_CIRCULAR_DEPENDENCY".to_string(),
+                            ));
                         }
-                        None => {
-                            if recursion.contains(dependency) {
-                                return Err(ErrorInfo::new(
-                                    Position::new(*interval, flow_name),
-                                    "GENERIC_COMPONENT_CIRCULAR_DEPENDENCY".to_string(),
-                                ));
-                            }
-                            let value = &get_object(
-                                dependency,
-                                array,
-                                args,
-                                flow_name,
-                                interval,
-                                memoization,
-                                recursion,
-                            )?;
+                        let value = &get_object(
+                            dependency,
+                            array,
+                            args,
+                            flow_name,
+                            interval,
+                            memoization,
+                            recursion,
+                        )?;
 
-                            if let Some(value) = value {
-                                memoization.insert(dependency.to_string(), value.to_owned());
+                        if let Some(value) = value {
+                            memoization.insert(dependency.clone(), value.clone());
 
-                                result =
-                                    serde_json::Value::add(flow_name, &result, value, interval)?;
-                            }
+                            result = serde_json::Value::add(flow_name, &result, value, interval)?;
                         }
                     }
                 }
@@ -329,8 +300,8 @@ fn get_object(
 ) -> Result<Option<serde_json::Value>, ErrorInfo> {
     // Cache the key we visit
     // Find the key to work with, then construct the object like it's supposed to be.
-    // Option 1: construct with parameters because required is true, so I need to find the right parameters and add all add_value function to it.
-    // Option 2: construct with default_value function and like option 1, add all add_value function to it.
+    // Option 1: construct with parameters because required is true, so I need to find the right parameters and add all add_value functions to it.
+    // Option 2: construct with default_value function and like option 1, add all add_value functions to it.
 
     if !recursion.insert(key.to_string()) {
         // TODO: error msg
@@ -338,66 +309,66 @@ fn get_object(
         unreachable!();
     }
 
-    if let Some(index_of_key) = get_index_of_key(key, array) {
-        if let Some(serde_json::Value::Object(object)) = array[index_of_key].get(key) {
-            return match (
-                get_parameter(index_of_key, key, args),
-                is_parameter_required(object),
-            ) {
-                (Some(param), _) => Ok(Some(serde_json::Value::add(
+    if let Some(index_of_key) = get_index_of_key(key, array)
+        && let Some(serde_json::Value::Object(object)) = array[index_of_key].get(key)
+    {
+        return match (
+            get_parameter(index_of_key, key, args),
+            is_parameter_required(object),
+        ) {
+            (Some(param), _) => Ok(Some(serde_json::Value::add(
+                flow_name,
+                &param,
+                &get_default_object(
+                    "add_value",
+                    object,
+                    array,
+                    args,
                     flow_name,
-                    &param,
-                    &get_default_object(
-                        "add_value",
-                        object,
-                        array,
-                        args,
-                        flow_name,
-                        interval,
-                        memoization,
-                        recursion,
-                    )?,
                     interval,
-                )?)),
-                (None, true) => {
-                    //TODO: send Error component instead of stopping program
-                    Err(ErrorInfo::new(
-                        Position::new(*interval, flow_name),
-                        format!("{} is a required parameter", key),
-                    ))
-                }
-                (None, false) => {
-                    if actions_exist(object).is_none() {
-                        Ok(None)
-                    } else {
-                        Ok(Some(serde_json::Value::add(
+                    memoization,
+                    recursion,
+                )?,
+                interval,
+            )?)),
+            (None, true) => {
+                //TODO: send Error component instead of stopping program
+                Err(ErrorInfo::new(
+                    Position::new(*interval, flow_name),
+                    format!("{key} is a required parameter"),
+                ))
+            }
+            (None, false) => {
+                if actions_exist(object).is_none() {
+                    Ok(None)
+                } else {
+                    Ok(Some(serde_json::Value::add(
+                        flow_name,
+                        &get_default_object(
+                            "default_value",
+                            object,
+                            array,
+                            args,
                             flow_name,
-                            &get_default_object(
-                                "default_value",
-                                object,
-                                array,
-                                args,
-                                flow_name,
-                                interval,
-                                memoization,
-                                recursion,
-                            )?,
-                            &get_default_object(
-                                "add_value",
-                                object,
-                                array,
-                                args,
-                                flow_name,
-                                interval,
-                                memoization,
-                                recursion,
-                            )?,
                             interval,
-                        )?))
-                    }
+                            memoization,
+                            recursion,
+                        )?,
+                        &get_default_object(
+                            "add_value",
+                            object,
+                            array,
+                            args,
+                            flow_name,
+                            interval,
+                            memoization,
+                            recursion,
+                        )?,
+                        interval,
+                    )?))
                 }
-            };
-        }
+            }
+        };
     }
 
     Ok(None)
@@ -415,56 +386,58 @@ pub fn gen_generic_component(
     args: &ArgsType,
     component: &serde_json::Value,
 ) -> Result<Literal, ErrorInfo> {
-    // Dereferences the JSON Object, iterate on all key, and construct the component.
-    // Create the hashmap that will be the result, and an hashmap for optimisation that will keep this module to make more than one equal computation.
-    // Insert into the final result and eliminates recurrent recursion if object has already been created once.
+    // Dereferences the JSON Object, iterate on all keys, and construct the component.
+    // Create the hashmap that will be the result, and a hashmap for optimization that will keep this module to make more than one equal computation.
+    // Insert into the final result and eliminate recurrent recursion if an object has already been created once.
 
     let mut hashmap: HashMap<String, Literal> = HashMap::new();
     let mut memoization: HashMap<String, serde_json::Value> = HashMap::new();
 
-    if let Some(object) = component.as_object() {
-        if let Some(serde_json::Value::Array(array)) = object.get("params") {
-            for object in array.iter() {
-                if let Some(object) = object.as_object() {
-                    let keys: Vec<&str> = object.keys().map(|key| key.as_str()).collect();
+    if let Some(object) = component.as_object()
+        && let Some(serde_json::Value::Array(array)) = object.get("params")
+    {
+        for object in array {
+            if let Some(object) = object.as_object() {
+                let keys: Vec<&str> = object.keys().map(String::as_str).collect();
 
-                    if keys.len() > 1 {
-                        return Err(ErrorInfo::new(
-                            Position::new(*interval, flow_name),
-                            format!("invalid generic component {}, multiple keys are no allowed for single argument {:?}", name, keys),
-                        ));
-                    }
+                if keys.len() > 1 {
+                    return Err(ErrorInfo::new(
+                        Position::new(*interval, flow_name),
+                        format!(
+                            "invalid generic component {name}, multiple keys are no allowed for single argument {keys:?}"
+                        ),
+                    ));
+                }
 
-                    for key in keys {
-                        if let Some(result) = memoization.get(key) {
+                for key in keys {
+                    if let Some(result) = memoization.get(key) {
+                        hashmap.insert(
+                            key.to_owned(),
+                            json_to_literal(&result.clone(), *interval, flow_name)?,
+                        );
+                    } else {
+                        let result = get_object(
+                            key,
+                            array,
+                            args,
+                            flow_name,
+                            interval,
+                            &mut memoization,
+                            &mut HashSet::new(),
+                        )?;
+
+                        if let Some(result) = result {
                             hashmap.insert(
                                 key.to_owned(),
-                                json_to_literal(&result.to_owned(), *interval, flow_name)?,
+                                json_to_literal(&result.clone(), *interval, flow_name)?,
                             );
-                        } else {
-                            let result = get_object(
-                                key,
-                                array,
-                                args,
-                                flow_name,
-                                interval,
-                                &mut memoization,
-                                &mut HashSet::new(),
-                            )?;
-
-                            if let Some(result) = result {
-                                hashmap.insert(
-                                    key.to_owned(),
-                                    json_to_literal(&result.to_owned(), *interval, flow_name)?,
-                                );
-                            }
                         }
                     }
                 }
             }
-            args.populate_json_to_literal(&mut hashmap, array, flow_name, interval.to_owned())?;
         }
+        args.populate_json_to_literal(&mut hashmap, array, flow_name, *interval)?;
     }
 
-    Ok(get_result(name, is_custom_component, &hashmap, *interval))
+    Ok(get_result(name, is_custom_component, hashmap, *interval))
 }

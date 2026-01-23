@@ -1,167 +1,110 @@
 #[cfg(feature = "postgresql-async")]
-use crate::future::db_connectors::{is_postgresql, postgresql_connector};
+use crate::future::db_connectors::postgresql_connector;
 
-use crate::data::AsyncDatabase;
-use crate::error_messages::ERROR_DB_SETUP;
-use crate::future::db_connectors::utils::*;
-use crate::EngineError;
-use csml_interpreter::data::csml_logs::{csml_logger, CsmlLog, LogLvl};
+#[cfg(feature = "sea-orm")]
+use crate::future::db_connectors::sea_orm_connector;
+
+use crate::data::{AsyncDatabase, EngineError, SeaOrmDbTraits};
+
+use crate::db_connectors::utils::get_expires_at;
+
 use csml_interpreter::data::Client;
 
-pub async fn delete_state_key(
+pub async fn delete_state_key<T: SeaOrmDbTraits>(
     client: &Client,
-    _type: &str,
+    type_: &str,
     key: &str,
-    db: &mut AsyncDatabase<'_>,
+    db: &mut AsyncDatabase<'_, T>,
 ) -> Result<(), EngineError> {
-    csml_logger(
-        CsmlLog::new(
-            None,
-            None,
-            None,
-            format!("db call delete state key: {:?}, type: {:?}", key, _type),
-        ),
-        LogLvl::Info,
-    );
-    csml_logger(
-        CsmlLog::new(
-            Some(client),
-            None,
-            None,
-            format!("db call delete state key: {:?}, type: {:?}", key, _type),
-        ),
-        LogLvl::Debug,
-    );
+    tracing::debug!(?client, r#type = %type_, %key, "db call delete state key");
 
-    #[cfg(feature = "postgresql-async")]
-    if is_postgresql() {
-        let db = postgresql_connector::get_db(db)?;
-        return postgresql_connector::state::delete_state_key(client, _type, key, db).await;
+    match db {
+        #[cfg(feature = "postgresql-async")]
+        AsyncDatabase::Postgresql(db) => {
+            postgresql_connector::state::delete_state_key(client, type_, key, db).await
+        }
+        #[cfg(feature = "sea-orm")]
+        AsyncDatabase::SeaOrm(db) => {
+            sea_orm_connector::state::delete_state_key(client, type_, key, db.db_ref()).await
+        }
+        #[cfg(not(feature = "sea-orm"))]
+        AsyncDatabase::_Impossible(_, _) => unreachable!(),
     }
-
-    Err(EngineError::Manager(ERROR_DB_SETUP.to_owned()))
 }
 
-pub async fn get_state_key(
+pub async fn get_state_key<T: SeaOrmDbTraits>(
     client: &Client,
-    _type: &str,
-    _key: &str,
-    db: &mut AsyncDatabase<'_>,
+    type_: &str,
+    key: &str,
+    db: &mut AsyncDatabase<'_, T>,
 ) -> Result<Option<serde_json::Value>, EngineError> {
-    csml_logger(
-        CsmlLog::new(
-            None,
-            None,
-            None,
-            format!("db call get state key: {:?}, type: {:?}", _key, _type),
-        ),
-        LogLvl::Info,
-    );
-    csml_logger(
-        CsmlLog::new(
-            Some(client),
-            None,
-            None,
-            format!("db call get state key: {:?}, type: {:?}", _key, _type),
-        ),
-        LogLvl::Debug,
-    );
+    tracing::debug!(?client, r#type = %type_, %key, "db call get state key");
 
-    #[cfg(feature = "postgresql-async")]
-    if is_postgresql() {
-        let db = postgresql_connector::get_db(db)?;
-        return postgresql_connector::state::get_state_key(client, _type, _key, db).await;
+    match db {
+        #[cfg(feature = "postgresql-async")]
+        AsyncDatabase::Postgresql(db) => {
+            postgresql_connector::state::get_state_key(client, type_, key, db).await
+        }
+        #[cfg(feature = "sea-orm")]
+        AsyncDatabase::SeaOrm(db) => {
+            sea_orm_connector::state::get_state_key(client, type_, key, db.db_ref()).await
+        }
+        #[cfg(not(feature = "sea-orm"))]
+        AsyncDatabase::_Impossible(_, _) => unreachable!(),
     }
-
-    Err(EngineError::Manager(ERROR_DB_SETUP.to_owned()))
 }
 
-pub async fn get_current_state(
+pub async fn set_state_items<T: SeaOrmDbTraits>(
     client: &Client,
-    db: &mut AsyncDatabase<'_>,
-) -> Result<Option<serde_json::Value>, EngineError> {
-    csml_logger(
-        CsmlLog::new(None, None, None, "db call get current state".to_string()),
-        LogLvl::Info,
-    );
-    csml_logger(
-        CsmlLog::new(
-            Some(client),
-            None,
-            None,
-            "db call get current state".to_string(),
-        ),
-        LogLvl::Debug,
-    );
-
-    #[cfg(feature = "postgresql-async")]
-    if is_postgresql() {
-        let db = postgresql_connector::get_db(db)?;
-        return postgresql_connector::state::get_current_state(client, db).await;
-    }
-
-    Err(EngineError::Manager(ERROR_DB_SETUP.to_owned()))
-}
-
-pub async fn set_state_items(
-    _client: &Client,
-    _type: &str,
-    _keys_values: Vec<(&str, &serde_json::Value)>,
+    type_: &str,
+    keys_values: Vec<(&str, &serde_json::Value)>,
     ttl: Option<chrono::Duration>,
-    _db: &mut AsyncDatabase<'_>,
+    db: &mut AsyncDatabase<'_, T>,
 ) -> Result<(), EngineError> {
-    csml_logger(
-        CsmlLog::new(
-            None,
-            None,
-            None,
-            format!(
-                "db call set state type: {:?}, keys and values {:?}",
-                _type, _keys_values
-            ),
-        ),
-        LogLvl::Info,
-    );
-    csml_logger(
-        CsmlLog::new(
-            Some(_client),
-            None,
-            None,
-            format!(
-                "db call set state type: {:?}, keys and values {:?}",
-                _type, _keys_values
-            ),
-        ),
-        LogLvl::Debug,
-    );
+    tracing::debug!(?client, r#type = %type_, ?keys_values, "db call set state items");
 
-    #[cfg(feature = "postgresql-async")]
-    if is_postgresql() {
-        let db = postgresql_connector::get_db(_db)?;
-        let expires_at = get_expires_at_for_postgresql(ttl);
-
-        return postgresql_connector::state::set_state_items(
-            _client,
-            _type,
-            _keys_values,
-            expires_at,
-            db,
-        )
-        .await;
+    match db {
+        #[cfg(feature = "postgresql-async")]
+        AsyncDatabase::Postgresql(db) => {
+            postgresql_connector::state::set_state_items(
+                client,
+                type_,
+                keys_values,
+                get_expires_at(ttl),
+                db,
+            )
+            .await
+        }
+        #[cfg(feature = "sea-orm")]
+        AsyncDatabase::SeaOrm(db) => {
+            sea_orm_connector::state::set_state_items(
+                client,
+                type_,
+                keys_values,
+                get_expires_at(ttl),
+                db.db_ref(),
+            )
+            .await
+        }
+        #[cfg(not(feature = "sea-orm"))]
+        AsyncDatabase::_Impossible(_, _) => unreachable!(),
     }
-
-    Err(EngineError::Manager(ERROR_DB_SETUP.to_owned()))
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "_dbtest"))]
 mod tests {
     use super::*;
+    use crate::db_connectors::{make_migrations, revert_migrations};
     use crate::future::db_connectors::init_db;
-    use crate::{Hold, IndexInfo};
     use core::panic;
+    use csml_interpreter::data::{Hold, IndexInfo};
+    use serial_test::serial;
+    use test_log::test;
 
-    #[tokio::test]
+    #[test(tokio::test)]
+    #[serial(postgres)]
     async fn ok_hold() {
+        make_migrations().unwrap();
         let client = Client {
             bot_id: "bot_id".to_owned(),
             channel_id: "channel_id".to_owned(),
@@ -203,29 +146,28 @@ mod tests {
             .unwrap()
             .unwrap();
 
-        let index_result = match serde_json::from_value::<IndexInfo>(hold["index"].clone()) {
-            Ok(index) => index,
-            Err(_) => panic!("value not found in db"),
+        let Ok(index_result) = serde_json::from_value::<IndexInfo>(hold["index"].clone()) else {
+            panic!("value not found in db");
         };
 
         if index_result.loop_index != index_info.index.loop_index
             && index_result.command_index != index_info.index.command_index
         {
-            panic!("db get hodl got the wrong value")
+            panic!("db get hold got the wrong value")
         }
 
         delete_state_key(&client, "hold", "position", &mut db)
             .await
             .unwrap();
 
-        match get_state_key(&client, "hold", "position", &mut db)
+        if get_state_key(&client, "hold", "position", &mut db)
             .await
             .unwrap()
+            .is_some()
         {
-            Some(_value) => panic!(
-                "get_state_key should not have found a hold because it has deleted just before"
-            ),
-            None => {}
+            panic!("get_state_key should not have found a hold because it has deleted just before")
         }
+
+        revert_migrations().unwrap();
     }
 }

@@ -1,0 +1,13 @@
+[package]
+name = "csml_engine_entity"
+version = "0.1.0"
+edition = "2024"
+authors = ["Sven Scheu <itssvens@gmail.com>"]
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+chrono = "0.4.42"
+sea-orm = { version = "1.1.16" }
+strum = { version = "0.27.2", features = ["derive"] }
+uuid = { version = "1.18.1", features = ["v4"] }

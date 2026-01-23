@@ -1,22 +1,25 @@
-use crate::data::{ast::*, primitive::PrimitiveNull, tokens::*};
+use crate::data::tokens::Brace;
+use crate::data::{
+    ast::{Expr, InsertStep, Instruction, InstructionScope, Interval, ObjectType},
+    primitive::PrimitiveNull,
+    tokens::{FROM, INSERT, Span},
+};
 use crate::error_format::ERROR_INSERT_ARGUMENT;
+use crate::parser::parse_group::parse_group;
 use crate::parser::{
     get_interval, get_string, get_tag,
     parse_comments::comment,
     parse_idents::{parse_idents_as, parse_idents_assignation},
 };
 use nom::{
+    Err, IResult, Parser,
     branch::alt,
-    bytes::complete::tag,
-    combinator::{cut, map, opt},
+    combinator::cut,
     error::{ContextError, ErrorKind, ParseError},
-    multi::separated_list0,
-    sequence::{preceded, terminated, tuple},
-    Err, IResult,
+    sequence::preceded,
 };
-
 ////////////////////////////////////////////////////////////////////////////////
-//// PRIVATE FUNCTIONS
+// PRIVATE FUNCTIONS
 ////////////////////////////////////////////////////////////////////////////////
 
 fn parse_step_name<'a, E>(s: Span<'a>) -> IResult<Span<'a>, Expr, E>
@@ -37,32 +40,11 @@ where
     Ok((s, vec![expr]))
 }
 
-fn parse_group<'a, E>(s: Span<'a>) -> IResult<Span<'a>, Vec<Expr>, E>
-where
-    E: ParseError<Span<'a>> + ContextError<Span<'a>>,
-{
-    let (s, (vec, ..)) = preceded(
-        tag(L_BRACE),
-        terminated(
-            tuple((
-                map(
-                    separated_list0(preceded(comment, tag(COMMA)), parse_step_name),
-                    |vec| vec.into_iter().collect(),
-                ),
-                opt(preceded(comment, tag(COMMA))),
-            )),
-            preceded(comment, tag(R_BRACE)),
-        ),
-    )(s)?;
-
-    Ok((s, vec))
-}
-
 fn parse_insert_params<'a, E>(s: Span<'a>) -> IResult<Span<'a>, Vec<Expr>, E>
 where
     E: ParseError<Span<'a>> + ContextError<Span<'a>>,
 {
-    match alt((parse_group, parse_step_name_as_vec))(s) {
+    match alt((parse_group(Brace, parse_step_name), parse_step_name_as_vec)).parse(s) {
         Ok(value) => Ok(value),
         Err(Err::Error(e)) => Err(Err::Failure(E::add_context(s, ERROR_INSERT_ARGUMENT, e))),
         Err(Err::Failure(e)) => Err(Err::Failure(E::append(s, ErrorKind::Tag, e))),
@@ -74,9 +56,9 @@ fn parse_from<'a, E>(s: Span<'a>) -> IResult<Span<'a>, String, E>
 where
     E: ParseError<Span<'a>> + ContextError<Span<'a>>,
 {
-    let (s, name) = preceded(comment, get_string)(s)?;
-    let (s, ..) = cut(get_tag(name, FROM))(s)?;
-    let (s, name) = cut(preceded(comment, get_string))(s)?;
+    let (s, name) = preceded(comment, get_string).parse(s)?;
+    let (s, ..) = cut(get_tag(name, FROM)).parse(s)?;
+    let (s, name) = cut(preceded(comment, get_string)).parse(s)?;
 
     Ok((s, name))
 }
@@ -85,12 +67,12 @@ fn parse_insert_prototype<'a, E>(s: Span<'a>) -> IResult<Span<'a>, (Interval, Ve
 where
     E: ParseError<Span<'a>> + ContextError<Span<'a>>,
 {
-    let (s, start) = preceded(comment, get_interval)(s)?;
-    let (s, name) = preceded(comment, get_string)(s)?;
+    let (s, start) = preceded(comment, get_interval).parse(s)?;
+    let (s, name) = preceded(comment, get_string).parse(s)?;
 
     let (s, ..) = get_tag(name, INSERT)(s)?;
 
-    let (s, fn_names) = cut(preceded(comment, parse_insert_params))(s)?;
+    let (s, fn_names) = cut(preceded(comment, parse_insert_params)).parse(s)?;
 
     let (s, from_flow) = parse_from(s)?;
 
@@ -98,7 +80,7 @@ where
 }
 
 ////////////////////////////////////////////////////////////////////////////////
-//// PUBLIC FUNCTION
+// PUBLIC FUNCTION
 ////////////////////////////////////////////////////////////////////////////////
 
 pub fn parse_insert<'a, E>(s: Span<'a>) -> IResult<Span<'a>, Vec<Instruction>, E>
@@ -111,9 +93,9 @@ where
         .iter()
         .map(|name| {
             let (name, original_name) = match name {
-                Expr::IdentExpr(ident) => (ident.ident.to_owned(), None),
+                Expr::IdentExpr(ident) => (ident.ident.clone(), None),
                 Expr::ObjectExpr(ObjectType::As(name, expr)) => match &**expr {
-                    Expr::IdentExpr(ident) => (name.ident.to_owned(), Some(ident.ident.to_owned())),
+                    Expr::IdentExpr(ident) => (name.ident.clone(), Some(ident.ident.clone())),
                     _ => unreachable!(),
                 },
                 _ => unreachable!(),

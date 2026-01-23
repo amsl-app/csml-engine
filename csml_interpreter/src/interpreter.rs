@@ -10,9 +10,11 @@ pub use json_to_rust::{json_to_literal, memory_to_literal};
 use crate::data::error_info::ErrorInfo;
 use crate::data::position::Position;
 use crate::data::{
-    ast::*, warnings::DisplayWarnings, Data, Hold, IndexInfo, Literal, MessageData, MSG,
+    Data, Hold, IndexInfo, Literal, MSG, MessageData,
+    ast::{Block, Expr, ObjectType},
+    warnings::DisplayWarnings,
 };
-use crate::error_format::*;
+use crate::error_format::{ERROR_START_INSTRUCTIONS, gen_error_info};
 use crate::interpreter::{
     ast_interpreter::{for_loop, match_actions, solve_if_statement, while_loop},
     variable_handler::{expr_to_literal, interval::interval_from_expr},
@@ -26,29 +28,27 @@ use std::sync::mpsc;
 // PRIVATE FUNCTION
 ////////////////////////////////////////////////////////////////////////////////
 
-fn step_vars_to_json(map: HashMap<String, Literal>) -> serde_json::Value {
-    let mut json_map = serde_json::Map::new();
-
-    for (key, val) in map.iter() {
-        let content_type = &val.content_type;
-        json_map.insert(key.to_owned(), val.primitive.format_mem(content_type, true));
-    }
-
-    serde_json::json!(json_map)
+fn step_vars_to_json(map: &HashMap<String, Literal>) -> serde_json::Value {
+    serde_json::Value::Object(
+        map.iter()
+            .map(|(key, value)| {
+                (
+                    key.clone(),
+                    value.primitive.format_mem(&value.content_type, true),
+                )
+            })
+            .collect(),
+    )
 }
 
-////////////////////////////////////////////////////////////////////////////////
-// PUBLIC FUNCTION
-////////////////////////////////////////////////////////////////////////////////
-
-pub fn interpret_scope(
+pub(crate) fn interpret_scope(
     actions: &Block,
     data: &mut Data,
-    sender: &Option<mpsc::Sender<MSG>>,
+    sender: Option<&mpsc::Sender<MSG>>,
 ) -> Result<MessageData, ErrorInfo> {
     let mut message_data = MessageData::default();
 
-    for (action, instruction_info) in actions.commands.iter() {
+    for (action, instruction_info) in &actions.commands {
         let instruction_total = instruction_info.index + instruction_info.total;
 
         if let Some(hold) = &mut data.context.hold {
@@ -56,7 +56,7 @@ pub fn interpret_scope(
                 continue;
             } else if hold.index.command_index == instruction_info.index {
                 data.context.hold = None;
-                continue; // this command is the hold, we need to skip it in order to continue the conversation
+                continue; // this command is the hold, we need to skip it to continue the conversation
             }
         }
 
@@ -64,15 +64,37 @@ pub fn interpret_scope(
             return Ok(message_data);
         }
 
+        let handle_hold = |mut message_data: MessageData, secure: bool| {
+            let index = instruction_info.index;
+
+            let hold = Hold::new(
+                IndexInfo {
+                    command_index: index,
+                    loop_index: data.loop_indexes.clone(),
+                },
+                step_vars_to_json(&data.step_vars),
+                data.context.step.get_step().to_owned(),
+                data.context.flow.clone(),
+                data.previous_info.clone(),
+                secure,
+            );
+
+            message_data.hold = Some(hold.clone());
+
+            MSG::send(sender, MSG::Hold(hold));
+            message_data.exit_condition = Some(ExitCondition::Hold);
+            message_data
+        };
+
         match action {
             Expr::ObjectExpr(ObjectType::Return(var)) => {
                 let lit = expr_to_literal(
                     var,
-                    &DisplayWarnings::On,
+                    DisplayWarnings::On,
                     None,
                     data,
                     &mut message_data,
-                    &None,
+                    None,
                 )?;
                 message_data.exit_condition = Some(ExitCondition::Return(lit));
 
@@ -89,60 +111,30 @@ pub fn interpret_scope(
                 return Ok(message_data);
             }
             Expr::ObjectExpr(ObjectType::Hold(..)) => {
-                let index = instruction_info.index;
-                let map = data.step_vars.to_owned();
-
-                let hold = Hold::new(
-                    IndexInfo {
-                        command_index: index,
-                        loop_index: data.loop_indexes.clone(),
-                    },
-                    step_vars_to_json(map),
-                    data.context.step.get_step(),
-                    data.context.flow.clone(),
-                    data.previous_info.clone(),
-                    false,
-                );
-
-                message_data.hold = Some(hold.to_owned());
-
-                MSG::send(sender, MSG::Hold(hold));
-                message_data.exit_condition = Some(ExitCondition::Hold);
-                return Ok(message_data);
+                return Ok(handle_hold(message_data, false));
             }
             Expr::ObjectExpr(ObjectType::HoldSecure(..)) => {
-                let index = instruction_info.index;
-                let map = data.step_vars.to_owned();
-
-                let hold = Hold::new(
-                    IndexInfo {
-                        command_index: index,
-                        loop_index: data.loop_indexes.clone(),
-                    },
-                    step_vars_to_json(map),
-                    data.context.step.get_step(),
-                    data.context.flow.clone(),
-                    data.previous_info.clone(),
-                    true,
-                );
-
-                message_data.hold = Some(hold.to_owned());
-
-                MSG::send(sender, MSG::Hold(hold));
-                message_data.exit_condition = Some(ExitCondition::Hold);
-                return Ok(message_data);
+                return Ok(handle_hold(message_data, true));
             }
             Expr::ObjectExpr(fun) => message_data = match_actions(fun, message_data, data, sender)?,
-            Expr::IfExpr(ref if_statement) => {
+            Expr::IfExpr(if_statement) => {
                 message_data =
                     solve_if_statement(if_statement, message_data, data, instruction_info, sender)?;
             }
             Expr::ForEachExpr(ident, index, expr, block, range) => {
-                message_data =
-                    for_loop(ident, index, expr, block, range, message_data, data, sender)?
+                message_data = for_loop(
+                    ident,
+                    index.as_ref(),
+                    expr,
+                    block,
+                    range,
+                    message_data,
+                    data,
+                    sender,
+                )?;
             }
             Expr::WhileExpr(expr, block, range) => {
-                message_data = while_loop(expr, block, range, message_data, data, sender)?
+                message_data = while_loop(expr, block, range, message_data, data, sender)?;
             }
             e => {
                 return Err(gen_error_info(
@@ -150,8 +142,53 @@ pub fn interpret_scope(
                     ERROR_START_INSTRUCTIONS.to_owned(),
                 ));
             }
-        };
+        }
     }
 
     Ok(message_data)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::data::Interval;
+    use crate::data::primitive::PrimitiveObject;
+
+    #[test]
+    fn test_step_vars_to_json() {
+        let data = HashMap::from([
+            (
+                "var1".to_owned(),
+                Literal {
+                    content_type: "test-1".to_string(),
+                    primitive: Box::new(PrimitiveObject::new(HashMap::new())),
+                    additional_info: None,
+                    secure_variable: false,
+                    interval: Interval::default(),
+                },
+            ),
+            (
+                "var2".to_owned(),
+                Literal {
+                    content_type: "test-2".to_string(),
+                    primitive: Box::new(PrimitiveObject::new(HashMap::new())),
+                    additional_info: None,
+                    secure_variable: false,
+                    interval: Interval::default(),
+                },
+            ),
+        ]);
+        let json = step_vars_to_json(&data);
+        let expected = serde_json::json!({
+            "var1": {
+                "_content": {},
+                "_content_type": "test-1",
+            },
+            "var2": {
+                "_content": {},
+                "_content_type": "test-2",
+            },
+        });
+        assert_eq!(json, expected);
+    }
 }

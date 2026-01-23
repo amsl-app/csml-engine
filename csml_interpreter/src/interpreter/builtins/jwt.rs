@@ -2,36 +2,38 @@ use crate::data::position::Position;
 use crate::data::primitive::{PrimitiveObject, PrimitiveString};
 use std::collections::HashMap;
 
-use crate::data::{ast::Interval, ArgsType, Literal};
-use crate::error_format::*;
+use crate::data::{ArgsType, Literal, ast::Interval};
+use crate::error_format::{ERROR_JWT, ErrorInfo, gen_error_info};
 
-pub fn jwt(args: ArgsType, flow_name: &str, interval: Interval) -> Result<Literal, ErrorInfo> {
-    let mut jwt_map: HashMap<String, Literal> = HashMap::new();
-    let mut header = HashMap::new();
-
-    match args.get("jwt", 0) {
-        Some(jwt) => {
-            jwt_map.insert("jwt".to_owned(), jwt.to_owned());
-
-            header.insert(
-                "typ".to_owned(),
-                PrimitiveString::get_literal("JWT", interval),
-            );
-            header.insert(
-                "alg".to_owned(),
-                PrimitiveString::get_literal("HS256", interval),
-            );
-            let lit_header = PrimitiveObject::get_literal(&header, interval);
-            jwt_map.insert("header".to_owned(), lit_header);
-
-            let mut result = PrimitiveObject::get_literal(&jwt_map, interval);
-            result.set_content_type("jwt");
-
-            Ok(result)
-        }
-        _ => Err(gen_error_info(
+pub(crate) fn jwt(
+    mut args: ArgsType,
+    flow_name: &str,
+    interval: Interval,
+) -> Result<Literal, ErrorInfo> {
+    let Some(jwt) = args.remove("jwt", 0) else {
+        return Err(gen_error_info(
             Position::new(interval, flow_name),
             ERROR_JWT.to_owned(),
-        )),
-    }
+        ));
+    };
+
+    let header = HashMap::from([
+        (
+            "typ".to_owned(),
+            PrimitiveString::get_literal("JWT", interval),
+        ),
+        (
+            "alg".to_owned(),
+            PrimitiveString::get_literal("HS256", interval),
+        ),
+    ]);
+
+    let lit_header = PrimitiveObject::get_literal(header, interval);
+
+    let jwt_map: HashMap<String, Literal> =
+        HashMap::from([("jwt".to_owned(), jwt), ("header".to_owned(), lit_header)]);
+
+    let result = PrimitiveObject::get_literal_with_type("jwt", jwt_map, interval);
+
+    Ok(result)
 }

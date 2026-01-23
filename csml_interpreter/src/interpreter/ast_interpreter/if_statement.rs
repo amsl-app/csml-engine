@@ -1,10 +1,10 @@
 use crate::data::{
+    Data, Literal, MSG, MessageData,
     ast::{Block, Expr, IfStatement, Infix, InstructionInfo},
     context::ContextStepInfo,
     warnings::DisplayWarnings,
-    Data, Literal, MessageData, MSG,
 };
-use crate::error_format::*;
+use crate::error_format::ErrorInfo;
 use crate::interpreter::{
     interpret_scope,
     variable_handler::{
@@ -14,36 +14,32 @@ use crate::interpreter::{
 };
 use std::sync::mpsc;
 
-////////////////////////////////////////////////////////////////////////////////
-// PRIVATE FUNCTIONS
-////////////////////////////////////////////////////////////////////////////////
-
 //TODO: add warning when comparing some objects
-pub fn valid_condition(
+pub(crate) fn valid_condition(
     expr: &Expr,
     data: &mut Data,
     msg_data: &mut MessageData,
-    sender: &Option<mpsc::Sender<MSG>>,
+    sender: Option<&mpsc::Sender<MSG>>,
 ) -> bool {
     match expr {
-        Expr::LitExpr { literal, .. } => valid_literal(Ok(literal.to_owned())),
+        Expr::LitExpr { literal, .. } => valid_literal(Ok(literal.clone())),
         Expr::IdentExpr(ident) => valid_literal(get_var(
-            ident.to_owned(),
-            &DisplayWarnings::Off,
+            ident.clone(),
+            DisplayWarnings::Off,
             None,
             data,
             msg_data,
             sender,
         )),
         Expr::PostfixExpr(post, exp) => {
-            valid_literal(evaluate_postfix(post, exp, data, msg_data, sender))
+            valid_literal(Ok(evaluate_postfix(post, exp, data, msg_data, sender)))
         }
         Expr::InfixExpr(inf, exp_1, exp_2) => valid_literal(evaluate_condition(
             inf, exp_1, exp_2, data, msg_data, sender,
         )),
         value => valid_literal(expr_to_literal(
             value,
-            &DisplayWarnings::Off,
+            DisplayWarnings::Off,
             None,
             data,
             msg_data,
@@ -58,8 +54,8 @@ fn evaluate_if_condition(
     data: &mut Data,
     consequence: &Block,
     instruction_info: &InstructionInfo,
-    sender: &Option<mpsc::Sender<MSG>>,
-    then_branch: &Option<Box<IfStatement>>,
+    sender: Option<&mpsc::Sender<MSG>>,
+    then_branch: Option<&IfStatement>,
 ) -> Result<MessageData, ErrorInfo> {
     if valid_condition(cond, data, &mut msg_data, sender) {
         msg_data = msg_data + interpret_scope(consequence, data, sender)?;
@@ -76,13 +72,13 @@ fn evaluate_if_condition(
 // PUBLIC FUNCTIONS
 ////////////////////////////////////////////////////////////////////////////////
 
-pub fn evaluate_condition(
+pub(crate) fn evaluate_condition(
     infix: &Infix,
     expr1: &Expr,
     expr2: &Expr,
     data: &mut Data,
     msg_data: &mut MessageData,
-    sender: &Option<mpsc::Sender<MSG>>,
+    sender: Option<&mpsc::Sender<MSG>>,
 ) -> Result<Literal, ErrorInfo> {
     let flow_name = if let ContextStepInfo::InsertedStep { step: _, ref flow } = data.context.step {
         flow.clone()
@@ -101,29 +97,29 @@ pub fn evaluate_condition(
             &flow_name,
             infix,
             evaluate_condition(i1, ex1, ex2, data, msg_data, sender),
-            expr_to_literal(exp, &DisplayWarnings::Off, None, data, msg_data, sender),
+            expr_to_literal(exp, DisplayWarnings::Off, None, data, msg_data, sender),
         ),
         (exp, Expr::InfixExpr(i1, ex1, ex2)) => evaluate_infix(
             &flow_name,
             infix,
-            expr_to_literal(exp, &DisplayWarnings::Off, None, data, msg_data, sender),
+            expr_to_literal(exp, DisplayWarnings::Off, None, data, msg_data, sender),
             evaluate_condition(i1, ex1, ex2, data, msg_data, sender),
         ),
         (exp_1, exp_2) => evaluate_infix(
             &flow_name,
             infix,
-            expr_to_literal(exp_1, &DisplayWarnings::Off, None, data, msg_data, sender),
-            expr_to_literal(exp_2, &DisplayWarnings::Off, None, data, msg_data, sender),
+            expr_to_literal(exp_1, DisplayWarnings::Off, None, data, msg_data, sender),
+            expr_to_literal(exp_2, DisplayWarnings::Off, None, data, msg_data, sender),
         ),
     }
 }
 
-pub fn solve_if_statement(
+pub(crate) fn solve_if_statement(
     statement: &IfStatement,
     mut msg_data: MessageData,
     data: &mut Data,
     instruction_info: &InstructionInfo,
-    sender: &Option<mpsc::Sender<MSG>>,
+    sender: Option<&mpsc::Sender<MSG>>,
 ) -> Result<MessageData, ErrorInfo> {
     match statement {
         IfStatement::IfStmt {
@@ -132,6 +128,7 @@ pub fn solve_if_statement(
             then_branch,
             last_action_index,
         } => {
+            let then_branch = then_branch.as_ref().map(AsRef::as_ref);
             match &data.context.hold {
                 Some(hold) => {
                     if hold.index.command_index <= *last_action_index {

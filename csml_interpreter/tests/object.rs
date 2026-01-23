@@ -19,7 +19,7 @@ fn check_error_component(vec: &MessageData) -> bool {
 fn ok_object_step1() {
     let data = r#"{"messages":[ {"content":{"text":"1"},"content_type":"text"} ],"memories":[]}"#;
     let msg = format_message(
-        Event::new("payload", "", serde_json::json!({})),
+        &Event::new("payload", "", serde_json::json!({})),
         Context::new(
             HashMap::new(),
             HashMap::new(),
@@ -35,14 +35,14 @@ fn ok_object_step1() {
     let v1: Value = message_to_json_value(msg);
     let v2: Value = serde_json::from_str(data).unwrap();
 
-    assert_eq!(v1, v2)
+    assert_eq!(v1, v2);
 }
 
 #[test]
 fn ok_object_step2() {
     let data = r#"{"messages":[ {"content":{"text":"4"},"content_type":"text"} ],"memories":[]}"#;
     let msg = format_message(
-        Event::new("payload", "", serde_json::json!({})),
+        &Event::new("payload", "", serde_json::json!({})),
         Context::new(
             HashMap::new(),
             HashMap::new(),
@@ -58,7 +58,7 @@ fn ok_object_step2() {
     let v1: Value = message_to_json_value(msg);
     let v2: Value = serde_json::from_str(data).unwrap();
 
-    assert_eq!(v1, v2)
+    assert_eq!(v1, v2);
 }
 
 #[test]
@@ -66,7 +66,7 @@ fn ok_object_step3() {
     let data =
         r#"{"messages":[ {"content":{"text":"true"},"content_type":"text"} ],"memories":[]}"#;
     let msg = format_message(
-        Event::new("payload", "", serde_json::json!({})),
+        &Event::new("payload", "", serde_json::json!({})),
         Context::new(
             HashMap::new(),
             HashMap::new(),
@@ -82,13 +82,13 @@ fn ok_object_step3() {
     let v1: Value = message_to_json_value(msg);
     let v2: Value = serde_json::from_str(data).unwrap();
 
-    assert_eq!(v1, v2)
+    assert_eq!(v1, v2);
 }
 
 #[test]
 fn ok_object_step4() {
     let msg = format_message(
-        Event::new("payload", "", serde_json::json!({})),
+        &Event::new("payload", "", serde_json::json!({})),
         Context::new(
             HashMap::new(),
             HashMap::new(),
@@ -102,13 +102,13 @@ fn ok_object_step4() {
     );
     let res = check_error_component(&msg);
 
-    assert_eq!(res, false)
+    assert!(!res);
 }
 
 #[test]
 fn ok_object_step5() {
     let msg = format_message(
-        Event::new("payload", "", serde_json::json!({})),
+        &Event::new("payload", "", serde_json::json!({})),
         Context::new(
             HashMap::new(),
             HashMap::new(),
@@ -128,9 +128,7 @@ fn ok_object_step5() {
         .parse::<i64>()
         .unwrap();
 
-    if int < 1 && int > 5 {
-        panic!("Random fail {}", int);
-    }
+    assert!((1..=5).contains(&int), "Random fail {int}");
 }
 
 #[test]
@@ -138,7 +136,7 @@ fn ok_object_step6() {
     let data = r#"{"messages":[ {"content":{"text":"3"},"content_type":"text"} ],"memories":[]}"#;
 
     let msg = format_message(
-        Event::new("payload", "", serde_json::json!({})),
+        &Event::new("payload", "", serde_json::json!({})),
         Context::new(
             HashMap::new(),
             HashMap::new(),
@@ -154,7 +152,7 @@ fn ok_object_step6() {
     let v1: Value = message_to_json_value(msg);
     let v2: Value = serde_json::from_str(data).unwrap();
 
-    assert_eq!(v1, v2)
+    assert_eq!(v1, v2);
 }
 
 #[test]
@@ -162,7 +160,7 @@ fn ok_step_7_assign() {
     let data = r#"{"messages":[ {"content":{"toto":42, "val":24},"content_type":"object"} ],"memories":[]}"#;
 
     let msg = format_message(
-        Event::new("payload", "", serde_json::json!({})),
+        &Event::new("payload", "", serde_json::json!({})),
         Context::new(
             HashMap::new(),
             HashMap::new(),
@@ -178,5 +176,30 @@ fn ok_step_7_assign() {
     let v1: Value = message_to_json_value(msg);
     let v2: Value = serde_json::from_str(data).unwrap();
 
-    assert_eq!(v1, v2)
+    assert_eq!(v1, v2);
+}
+
+#[test]
+fn ok_equals() {
+    let data = serde_json::json!(
+        {"messages":[ {"content": {"text": "true"},"content_type":"text"} ],"memories":[]}
+    );
+
+    let msg = format_message(
+        &Event::new("payload", "", serde_json::json!({})),
+        Context::new(
+            HashMap::new(),
+            HashMap::new(),
+            None,
+            None,
+            "equals",
+            "flow",
+            None,
+        ),
+        "CSML/basic_test/object.csml",
+    );
+
+    let v1: Value = message_to_json_value(msg);
+
+    assert_eq!(v1, data);
 }

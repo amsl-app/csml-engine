@@ -12,7 +12,7 @@ use serde_json::Value;
 #[test]
 fn ok_time() {
     let data = r#"
-        {"messages":[ 
+        {"messages":[
             {"content":{"text": "true"},"content_type":"text"},
             {"content":{"text": "true"},"content_type":"text"},
             {"content":{"text": "2014-10-20T01:00:00.000Z"},"content_type":"text"},
@@ -21,7 +21,7 @@ fn ok_time() {
         "memories":[]
         }"#;
     let msg = format_message(
-        Event::new("payload", "", serde_json::json!({})),
+        &Event::new("payload", "", serde_json::json!({})),
         Context::new(
             HashMap::new(),
             HashMap::new(),
@@ -37,19 +37,19 @@ fn ok_time() {
     let v1: Value = message_to_json_value(msg);
     let v2: Value = serde_json::from_str(data).unwrap();
 
-    assert_eq!(v1, v2)
+    assert_eq!(v1, v2);
 }
 
 #[test]
 fn ok_time_parse_1_args() {
     let data = r#"
-        {"messages":[ 
+        {"messages":[
             {"content":{"text": "1983-08-13T00:00:00.000Z"},"content_type":"text"}
         ],
         "memories":[]
         }"#;
     let msg = format_message(
-        Event::new("payload", "", serde_json::json!({})),
+        &Event::new("payload", "", serde_json::json!({})),
         Context::new(
             HashMap::new(),
             HashMap::new(),
@@ -65,19 +65,19 @@ fn ok_time_parse_1_args() {
     let v1: Value = message_to_json_value(msg);
     let v2: Value = serde_json::from_str(data).unwrap();
 
-    assert_eq!(v1, v2)
+    assert_eq!(v1, v2);
 }
 
 #[test]
 fn ok_time_parse_2_args() {
     let data = r#"
-        {"messages":[ 
+        {"messages":[
             {"content":{"text": "1983-08-13T12:09:14.274Z"},"content_type":"text"}
         ],
         "memories":[]
         }"#;
     let msg = format_message(
-        Event::new("payload", "", serde_json::json!({})),
+        &Event::new("payload", "", serde_json::json!({})),
         Context::new(
             HashMap::new(),
             HashMap::new(),
@@ -93,19 +93,19 @@ fn ok_time_parse_2_args() {
     let v1: Value = message_to_json_value(msg);
     let v2: Value = serde_json::from_str(data).unwrap();
 
-    assert_eq!(v1, v2)
+    assert_eq!(v1, v2);
 }
 
 #[test]
 fn ok_parse_timezone() {
     let data = r#"
-        {"messages":[ 
+        {"messages":[
             {"content":{"text": "2014-11-28T21:00:09.000+09:00"},"content_type":"text"}
         ],
         "memories":[]
         }"#;
     let msg = format_message(
-        Event::new("payload", "", serde_json::json!({})),
+        &Event::new("payload", "", serde_json::json!({})),
         Context::new(
             HashMap::new(),
             HashMap::new(),
@@ -121,19 +121,19 @@ fn ok_parse_timezone() {
     let v1: Value = message_to_json_value(msg);
     let v2: Value = serde_json::from_str(data).unwrap();
 
-    assert_eq!(v1, v2)
+    assert_eq!(v1, v2);
 }
 
 #[test]
 fn ok_with_timezone() {
     let data = r#"
-        {"messages":[ 
+        {"messages":[
             {"content":{"text": "2014-11-28T22:00:09.000+01:00"},"content_type":"text"}
         ],
         "memories":[]
         }"#;
     let msg = format_message(
-        Event::new("payload", "", serde_json::json!({})),
+        &Event::new("payload", "", serde_json::json!({})),
         Context::new(
             HashMap::new(),
             HashMap::new(),
@@ -149,5 +149,5 @@ fn ok_with_timezone() {
     let v1: Value = message_to_json_value(msg);
     let v2: Value = serde_json::from_str(data).unwrap();
 
-    assert_eq!(v1, v2)
+    assert_eq!(v1, v2);
 }

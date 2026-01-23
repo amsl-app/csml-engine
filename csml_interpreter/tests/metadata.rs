@@ -1,7 +1,7 @@
 mod support;
 
 use csml_interpreter::data::context::Context;
-use csml_interpreter::data::{event::Event, primitive::PrimitiveInt, Interval};
+use csml_interpreter::data::{Interval, event::Event, primitive::PrimitiveInt};
 use std::collections::HashMap;
 
 use crate::support::tools::format_message;
@@ -24,14 +24,14 @@ fn metadata() {
     );
 
     let msg = format_message(
-        Event::new("payload", "", serde_json::json!({})),
+        &Event::new("payload", "", serde_json::json!({})),
         Context::new(HashMap::new(), metadata, None, None, "start", "flow", None),
         "CSML/basic_test/metadata.csml",
     );
 
     let v1: Value = message_to_json_value(msg);
     let v2: Value = serde_json::from_str(data).unwrap();
-    assert_eq!(v1, v2)
+    assert_eq!(v1, v2);
 }
 
 #[test]
@@ -50,7 +50,7 @@ fn metadata_step1() {
     );
 
     let msg = format_message(
-        Event::new("payload", "", serde_json::json!({})),
+        &Event::new("payload", "", serde_json::json!({})),
         Context::new(HashMap::new(), metadata, None, None, "step1", "flow", None),
         "CSML/basic_test/metadata.csml",
     );
@@ -58,7 +58,7 @@ fn metadata_step1() {
     let v1: Value = message_to_json_value(msg);
     let v2: Value = serde_json::from_str(data).unwrap();
 
-    assert_eq!(v1, v2)
+    assert_eq!(v1, v2);
 }
 
 #[test]
@@ -76,7 +76,7 @@ fn metadata_step2() {
     );
 
     let msg = format_message(
-        Event::new("payload", "", serde_json::json!({})),
+        &Event::new("payload", "", serde_json::json!({})),
         Context::new(HashMap::new(), metadata, None, None, "step2", "flow", None),
         "CSML/basic_test/metadata.csml",
     );
@@ -84,5 +84,5 @@ fn metadata_step2() {
     let v1: Value = message_to_json_value(msg);
     let v2: Value = serde_json::from_str(data).unwrap();
 
-    assert_eq!(v1, v2)
+    assert_eq!(v1, v2);
 }

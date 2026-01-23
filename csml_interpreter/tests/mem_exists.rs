@@ -15,7 +15,7 @@ fn ok_tmp_memory() {
         r#"{"messages":[ {"content":{ "text": "true"  },"content_type":"text"} ],"memories":[]}"#;
 
     let msg = format_message(
-        Event::new("payload", "", serde_json::json!({})),
+        &Event::new("payload", "", serde_json::json!({})),
         Context::new(
             HashMap::new(),
             HashMap::new(),
@@ -31,20 +31,20 @@ fn ok_tmp_memory() {
     let v1: Value = message_to_json_value(msg);
     let v2: Value = serde_json::from_str(data).unwrap();
 
-    assert_eq!(v1, v2)
+    assert_eq!(v1, v2);
 }
 
 #[test]
 fn ok_permanent_memory() {
     let data = r#"{
             "memories":[{"key":"toto", "value":42}],
-            "messages":[ 
-                {"content":{ "text": "true"  },"content_type":"text"} 
+            "messages":[
+                {"content":{ "text": "true"  },"content_type":"text"}
             ]
         }"#;
 
     let msg = format_message(
-        Event::new("payload", "", serde_json::json!({})),
+        &Event::new("payload", "", serde_json::json!({})),
         Context::new(
             HashMap::new(),
             HashMap::new(),
@@ -60,7 +60,7 @@ fn ok_permanent_memory() {
     let v1: Value = message_to_json_value(msg);
     let v2: Value = serde_json::from_str(data).unwrap();
 
-    assert_eq!(v1, v2)
+    assert_eq!(v1, v2);
 }
 
 #[test]
@@ -69,7 +69,7 @@ fn fail_exists_memory() {
         r#"{"messages":[ {"content":{ "text": "false"  },"content_type":"text"} ],"memories":[]}"#;
 
     let msg = format_message(
-        Event::new("payload", "", serde_json::json!({})),
+        &Event::new("payload", "", serde_json::json!({})),
         Context::new(
             HashMap::new(),
             HashMap::new(),
@@ -85,5 +85,5 @@ fn fail_exists_memory() {
     let v1: Value = message_to_json_value(msg);
     let v2: Value = serde_json::from_str(data).unwrap();
 
-    assert_eq!(v1, v2)
+    assert_eq!(v1, v2);
 }

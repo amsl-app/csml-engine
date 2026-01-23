@@ -1,18 +1,21 @@
-use crate::data::{ast::*, tokens::*};
+use crate::data::{
+    ast::Expr,
+    tokens::{BACKSLASH_DOUBLE_QUOTE, COLON, COMMA, DOUBLE_QUOTE, Span},
+};
 use crate::parser::{parse_comments::comment, tools::get_interval};
 
+use crate::data::tokens::{LBrace, RBrace, Token};
 use crate::parser::operator::parse_operator;
 use nom::{
+    IResult, Parser,
     bytes::complete::tag,
     bytes::complete::take_till1,
     combinator::{cut, map, opt},
-    error::{context, ContextError, ParseError},
+    error::{ContextError, ParseError, context},
     multi::separated_list0,
-    sequence::{preceded, separated_pair, terminated, tuple},
-    IResult,
+    sequence::{preceded, separated_pair, terminated},
 };
 use std::collections::HashMap;
-
 ////////////////////////////////////////////////////////////////////////////////
 // PRIVATE FUNCTIONS
 ////////////////////////////////////////////////////////////////////////////////
@@ -39,17 +42,16 @@ where
                 tag(token),
             )),
         ),
-    )(s)?;
+    )
+    .parse(s)?;
 
-    // the is in sub string param is use to determine if the key string was declare inside a string or not
-    let is_sub_string = match token {
-        BACKSLASH_DOUBLE_QUOTE => true,
-        _ => false,
-    };
+    // the is in sub string param is used to determine if the key string was declared inside a string or not
+    let is_sub_string = matches!(token, BACKSLASH_DOUBLE_QUOTE);
 
     Ok((s, (key, is_sub_string)))
 }
 
+#[allow(clippy::type_complexity)]
 fn parse_arguments<'a, E>(
     s: Span<'a>,
 ) -> IResult<Span<'a>, (Vec<((Span<'a>, bool), Expr)>, bool), E>
@@ -63,7 +65,8 @@ where
             cut(preceded(comment, tag(COLON))),
             parse_operator,
         ),
-    )(s)?;
+    )
+    .parse(s)?;
 
     Ok((s, (result, false)))
 }
@@ -76,17 +79,17 @@ where
         let args_map = tuple_vec
             .into_iter()
             .map(|((key, token_type), value)| {
-                match token_type {
-                    true => is_in_sub_string = true,
-                    false => (),
-                };
+                if token_type {
+                    is_in_sub_string = true;
+                }
 
                 (String::from(*key.fragment()), value)
             })
             .collect();
 
         (args_map, is_in_sub_string)
-    })(s)
+    })
+    .parse(s)
 }
 
 ////////////////////////////////////////////////////////////////////////////////
@@ -97,17 +100,18 @@ pub fn parse_object<'a, E>(s: Span<'a>) -> IResult<Span<'a>, Expr, E>
 where
     E: ParseError<Span<'a>> + ContextError<Span<'a>>,
 {
-    let (s, mut interval) = preceded(comment, get_interval)(s)?;
+    let (s, mut interval) = preceded(comment, get_interval).parse(s)?;
     // the 'is_in_sub_string' param is use to determine if this object was declare inside a string or not
     let (s, ((object, is_in_sub_string), _trailing_comma)) = preceded(
-        tag(L_BRACE),
+        tag(LBrace::TOKEN),
         terminated(
-            tuple((key_value, opt(preceded(comment, tag(COMMA))))),
-            preceded(comment, tag(R_BRACE)),
+            (key_value, opt(preceded(comment, tag(COMMA)))),
+            preceded(comment, tag(RBrace::TOKEN)),
         ),
-    )(s)?;
+    )
+    .parse(s)?;
 
-    let (s, end) = preceded(comment, get_interval)(s)?;
+    let (s, end) = preceded(comment, get_interval).parse(s)?;
     interval.add_end(end);
 
     Ok((

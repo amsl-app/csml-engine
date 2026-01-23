@@ -1,6 +1,6 @@
 // use crate::error_format::ErrorInfo;
-use crate::data::primitive::{PrimitiveArray, PrimitiveObject, PrimitiveString};
 use crate::data::Literal;
+use crate::data::primitive::{PrimitiveArray, PrimitiveObject, PrimitiveString};
 
 fn get_accept(lit: &Literal) -> Option<&Literal> {
     let val = lit
@@ -23,14 +23,11 @@ fn contains(array_lit: &Literal, key: &Literal) -> bool {
     ) {
         (Some(array), None) => array.value.contains(key),
         (Some(array), Some(string)) => {
-            for elem in array.value.iter() {
-                match elem.primitive.as_any().downcast_ref::<PrimitiveString>() {
-                    Some(val)
-                        if val.value.to_ascii_lowercase() == string.value.to_ascii_lowercase() =>
-                    {
-                        return true
-                    }
-                    _ => continue,
+            for elem in &array.value {
+                if let Some(val) = elem.primitive.as_any().downcast_ref::<PrimitiveString>()
+                    && val.value.eq_ignore_ascii_case(&string.value)
+                {
+                    return true;
                 }
             }
             false
@@ -39,6 +36,7 @@ fn contains(array_lit: &Literal, key: &Literal) -> bool {
     }
 }
 
+#[must_use]
 pub fn match_obj(lit1: &Literal, lit2: &Literal) -> bool {
     match (&lit1.content_type, &lit2.content_type) {
         (b1, b2) if (b1 == "button" || b1 == "object") && (b2 == "button" || b2 == "object") => {
@@ -48,11 +46,11 @@ pub fn match_obj(lit1: &Literal, lit2: &Literal) -> bool {
             }
         }
 
-        (.., button) if (button == "button" || button == "object") => match get_accept(lit2) {
+        (.., button) if button == "button" || button == "object" => match get_accept(lit2) {
             Some(l2) => match_obj(lit1, l2),
             None => false,
         },
-        (button, ..) if (button == "button" || button == "object") => match get_accept(lit1) {
+        (button, ..) if button == "button" || button == "object" => match get_accept(lit1) {
             Some(l1) => match_obj(l1, lit2),
             None => false,
         },
@@ -60,7 +58,7 @@ pub fn match_obj(lit1: &Literal, lit2: &Literal) -> bool {
         (array1, array2) if array1 == "array" && array2 == "array" => lit1 == lit2,
         (.., array) if array == "array" => contains(lit2, lit1),
         (array, ..) if array == "array" => contains(lit1, lit2),
-        (..) => &lit1.primitive == &lit2.primitive,
+        (..) => lit1.primitive.eq(&lit2.primitive),
     }
 }
 
@@ -69,7 +67,7 @@ mod tests {
     use super::*;
     use crate::data::primitive::array::PrimitiveArray;
     use crate::data::primitive::string::PrimitiveString;
-    use crate::data::{ast::Interval, ArgsType};
+    use crate::data::{ArgsType, ast::Interval};
     use crate::interpreter::{
         components::load_components, variable_handler::gen_generic_component::gen_generic_component,
     };
@@ -124,7 +122,7 @@ mod tests {
         map.insert(
             "accepts".to_owned(),
             PrimitiveArray::get_literal(
-                &vec![
+                vec![
                     PrimitiveString::get_literal("toto", interval),
                     PrimitiveString::get_literal("plop", interval),
                     PrimitiveString::get_literal("TEST", interval),
@@ -153,24 +151,24 @@ mod tests {
     }
 
     fn match_lit_true(lit1: &Literal, lit2: &Literal) {
-        match match_obj(lit1, lit2) {
-            boolean if boolean => {}
-            _ => panic!("\n\nlit1: {:?}\n\n lit2: {:?}\n", lit1, lit2),
-        }
+        assert!(
+            match_obj(lit1, lit2),
+            "\n\nlit1: {lit1:?}\n\n lit2: {lit2:?}\n"
+        );
     }
 
     fn match_lit_false(lit1: &Literal, lit2: &Literal) {
-        match match_obj(lit1, lit2) {
-            boolean if !boolean => {}
-            _ => panic!("\n\nlit1: {:?}\n\n lit2: {:?}\n", lit1, lit2),
-        }
+        assert!(
+            !match_obj(lit1, lit2),
+            "\n\nlit1: {lit1:?}\n\n lit2: {lit2:?}\n"
+        );
     }
 
     fn match_lit_err(lit1: &Literal, lit2: &Literal) {
-        match match_obj(lit1, lit2) {
-            boolean if boolean => panic!("\n\n lit1: {:#?}\n\n lit2: {:#?}\n", lit1, lit2),
-            _ => {}
-        }
+        assert!(
+            !match_obj(lit1, lit2),
+            "\n\n lit1: {lit1:#?}\n\n lit2: {lit2:#?}\n"
+        );
     }
 
     #[test]
@@ -184,7 +182,7 @@ mod tests {
     #[test]
     fn ok_match_array_str() {
         let bt1 = PrimitiveArray::get_literal(
-            &[PrimitiveString::get_literal("hola", gen_inter())],
+            vec![PrimitiveString::get_literal("hola", gen_inter())],
             gen_inter(),
         );
         let bt2 = PrimitiveString::get_literal("hola", gen_inter());

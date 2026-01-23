@@ -1,13 +1,14 @@
 use crate::data::{
+    Hold, Interval, Literal,
     primitive::{PrimitiveObject, PrimitiveType},
-    Client, Hold, Interval, Literal,
 };
 
 use crate::interpreter::{json_to_literal, memory_to_literal};
 
+use crate::error_format::ErrorInfo;
+use csml_model::Client;
 use nom::lib::std::collections::HashMap;
 use serde::{Deserialize, Serialize};
-
 ////////////////////////////////////////////////////////////////////////////////
 // DATA STRUCTURE
 ////////////////////////////////////////////////////////////////////////////////
@@ -26,28 +27,28 @@ pub enum ContextStepInfo {
 }
 
 impl ContextStepInfo {
-    pub fn get_step(&self) -> String {
+    #[must_use]
+    pub fn get_step(&self) -> &str {
         match self {
-            ContextStepInfo::Normal(step)
-            | ContextStepInfo::UnknownFlow(step)
-            | ContextStepInfo::InsertedStep { step, flow: _ } => step.to_owned(),
+            Self::Normal(step) | Self::UnknownFlow(step) | Self::InsertedStep { step, flow: _ } => {
+                step
+            }
         }
     }
 
-    pub fn get_step_ref(&self) -> &str {
-        match self {
-            ContextStepInfo::Normal(step)
-            | ContextStepInfo::UnknownFlow(step)
-            | ContextStepInfo::InsertedStep { step, flow: _ } => step,
-        }
+    #[must_use]
+    fn is_step(&self, other: &str) -> bool {
+        self.get_step() == other
     }
 
-    pub fn is_step(&self, cmp_step: &str) -> bool {
-        match self {
-            ContextStepInfo::Normal(step)
-            | ContextStepInfo::UnknownFlow(step)
-            | ContextStepInfo::InsertedStep { step, flow: _ } => step == cmp_step,
-        }
+    #[must_use]
+    pub fn is_start(&self) -> bool {
+        self.is_step("start")
+    }
+
+    #[must_use]
+    pub fn is_end(&self) -> bool {
+        self.is_step("end")
     }
 }
 
@@ -73,8 +74,13 @@ pub struct Context {
 // STATIC FUNCTIONS
 ////////////////////////////////////////////////////////////////////////////////
 
-pub fn get_hashmap_from_mem(lit: &serde_json::Value, flow_name: &str) -> HashMap<String, Literal> {
-    match memory_to_literal(
+#[must_use]
+fn to_literal<T, F: Fn(T, Interval, &str) -> Result<Literal, ErrorInfo>>(
+    f: F,
+    lit: T,
+    flow_name: &str,
+) -> HashMap<String, Literal> {
+    if let Ok(vars) = f(
         lit,
         Interval {
             start_line: 0,
@@ -84,40 +90,26 @@ pub fn get_hashmap_from_mem(lit: &serde_json::Value, flow_name: &str) -> HashMap
             offset: 0,
         },
         flow_name,
-    ) {
-        Ok(vars) if vars.primitive.get_type() == PrimitiveType::PrimitiveObject => {
-            match vars.primitive.as_any().downcast_ref::<PrimitiveObject>() {
-                Some(map) => map.value.clone(),
-                None => HashMap::new(),
-            }
-        }
-        _ => HashMap::new(),
+    ) && vars.primitive.get_type() == PrimitiveType::PrimitiveObject
+        && let Some(map) = vars.primitive.as_any().downcast_ref::<PrimitiveObject>()
+    {
+        return map.value.clone();
     }
+    HashMap::new()
 }
 
+#[must_use]
+pub fn get_hashmap_from_mem(lit: &serde_json::Value, flow_name: &str) -> HashMap<String, Literal> {
+    to_literal(memory_to_literal, lit, flow_name)
+}
+
+#[must_use]
 pub fn get_hashmap_from_json(lit: &serde_json::Value, flow_name: &str) -> HashMap<String, Literal> {
-    match json_to_literal(
-        lit,
-        Interval {
-            start_line: 0,
-            start_column: 0,
-            end_line: None,
-            end_column: None,
-            offset: 0,
-        },
-        flow_name,
-    ) {
-        Ok(vars) if vars.primitive.get_type() == PrimitiveType::PrimitiveObject => {
-            match vars.primitive.as_any().downcast_ref::<PrimitiveObject>() {
-                Some(map) => map.value.clone(),
-                None => HashMap::new(),
-            }
-        }
-        _ => HashMap::new(),
-    }
+    to_literal(json_to_literal, lit, flow_name)
 }
 
 impl Context {
+    #[must_use]
     pub fn new(
         current: HashMap<String, Literal>,
         metadata: HashMap<String, Literal>,
@@ -136,31 +128,5 @@ impl Context {
             flow: flow.to_owned(),
             previous_bot,
         }
-    }
-}
-
-////////////////////////////////////////////////////////////////////////////////
-// PUBLIC FUNCTIONS
-////////////////////////////////////////////////////////////////////////////////
-
-pub fn get_hashmap(lit: &serde_json::Value, flow_name: &str) -> HashMap<String, Literal> {
-    match json_to_literal(
-        lit,
-        Interval {
-            start_line: 0,
-            start_column: 0,
-            end_line: None,
-            end_column: None,
-            offset: 0,
-        },
-        flow_name,
-    ) {
-        Ok(vars) if vars.primitive.get_type() == PrimitiveType::PrimitiveObject => {
-            match vars.primitive.as_any().downcast_ref::<PrimitiveObject>() {
-                Some(map) => map.value.clone(),
-                None => HashMap::new(),
-            }
-        }
-        _ => HashMap::new(),
     }
 }

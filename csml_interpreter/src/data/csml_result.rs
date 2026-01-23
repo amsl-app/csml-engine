@@ -10,10 +10,10 @@ use std::collections::HashMap;
 
 #[derive(Debug)]
 pub struct CsmlResult {
-    pub flows: Option<HashMap<String, Flow>>,
-    pub extern_flows: Option<HashMap<String, Flow>>,
-    pub warnings: Option<Vec<Warnings>>,
-    pub errors: Option<Vec<ErrorInfo>>,
+    pub flows: HashMap<String, Flow>,
+    pub extern_flows: HashMap<String, Flow>,
+    pub warnings: Vec<Warnings>,
+    pub errors: Vec<ErrorInfo>,
 }
 
 ////////////////////////////////////////////////////////////////////////////////
@@ -21,32 +21,13 @@ pub struct CsmlResult {
 ////////////////////////////////////////////////////////////////////////////////
 
 impl CsmlResult {
+    #[must_use]
     pub fn new(
         flows: HashMap<String, Flow>,
         extern_flows: HashMap<String, Flow>,
         warnings: Vec<Warnings>,
         errors: Vec<ErrorInfo>,
     ) -> Self {
-        let flows = match flows.is_empty() {
-            false => Some(flows),
-            true => None,
-        };
-
-        let extern_flows = match extern_flows.is_empty() {
-            false => Some(extern_flows),
-            true => None,
-        };
-
-        let warnings = match warnings.is_empty() {
-            false => Some(warnings),
-            true => None,
-        };
-
-        let errors = match errors.is_empty() {
-            false => Some(errors),
-            true => None,
-        };
-
         Self {
             flows,
             extern_flows,

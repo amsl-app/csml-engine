@@ -1,8 +1,10 @@
+use crate::data::EngineError;
+use diesel::QueryResult;
 use diesel::pg::Pg;
 use diesel::query_builder::{AstPass, Query, QueryFragment, QueryId};
 use diesel::sql_types::BigInt;
-use diesel::QueryResult;
-use diesel_async::{methods::LoadQuery, AsyncPgConnection, RunQueryDsl};
+use diesel_async::{AsyncPgConnection, RunQueryDsl, methods::LoadQuery};
+use num_traits::ToPrimitive;
 
 pub trait Paginate: Sized + Send {
     fn paginate(self, page: u32) -> Paginated<Self>;
@@ -16,7 +18,7 @@ where
         Paginated {
             query: self,
             per_page: DEFAULT_PER_PAGE,
-            offset: (page as i64 - 1) * DEFAULT_PER_PAGE,
+            offset: i64::from(page) * DEFAULT_PER_PAGE,
         }
     }
 }
@@ -46,10 +48,10 @@ where
     T: Send,
 {
     pub fn per_page(self, per_page: u32) -> Self {
-        let old_page = self.offset / self.per_page + 1;
-        Paginated {
-            per_page: per_page as i64,
-            offset: (old_page - 1) * per_page as i64,
+        let old_page = self.offset / self.per_page;
+        Self {
+            per_page: i64::from(per_page),
+            offset: (old_page) * i64::from(per_page),
             query: self.query,
         }
     }
@@ -62,11 +64,24 @@ where
         Self: LoadQuery<'a, AsyncPgConnection, (U, i64)>,
         U: Send,
     {
-        let per_page = self.per_page;
+        let per_page = self.per_page.to_u32().ok_or_else(|| {
+            diesel::result::Error::DeserializationError(Box::new(EngineError::Internal(
+                "Failed to convert per_page to u32".to_string(),
+            )))
+        })?;
         let results = self.load::<(U, i64)>(conn).await?;
-        let total = results.get(0).map(|x| x.1).unwrap_or(0);
+        let total = results
+            .as_slice()
+            .first()
+            .map_or(0, |x| x.1)
+            .to_u32()
+            .ok_or_else(|| {
+                diesel::result::Error::DeserializationError(Box::new(EngineError::Internal(
+                    "Failed to convert total to u32".to_string(),
+                )))
+            })?;
         let records = results.into_iter().map(|x| x.0).collect();
-        let total_pages = (total as f64 / per_page as f64).ceil() as u32;
+        let total_pages = total.div_ceil(per_page);
         Ok((records, total_pages))
     }
 }

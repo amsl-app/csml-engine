@@ -64,7 +64,7 @@ step_9:
     goto end
 
 
-// only event type text && payload can be use as normal strings and use the string methos
+// only event type text && payload can be use as normal strings and use the string methods
 event_types:
     say event.is_int()
     goto end

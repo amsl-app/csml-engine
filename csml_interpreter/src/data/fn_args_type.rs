@@ -1,47 +1,42 @@
 use crate::data::{
+    Interval, Literal,
     position::Position,
     primitive::{PrimitiveArray, PrimitiveObject, PrimitiveString},
-    Interval, Literal,
 };
-use crate::error_format::*;
+use crate::error_format::{ErrorInfo, gen_error_info};
 
-use std::collections::{hash_map::Iter, HashMap};
+use std::collections::{HashMap, hash_map::Iter};
 
+use crate::data::primitive::PrimitiveType;
 use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, bincode::Encode, bincode::Decode)]
 pub enum ArgsType {
     Named(HashMap<String, Literal>),
     Normal(HashMap<String, Literal>),
 }
 
 impl ArgsType {
-    pub fn args_to_debug(&self, interval: Interval) -> Literal {
+    #[must_use]
+    pub fn args_to_debug(self, interval: Interval) -> Literal {
         match self {
-            Self::Named(map) | Self::Normal(map) => {
-                let mut obj = HashMap::new();
-
-                let mut args = vec![];
-                let size = map.len();
-                let mut index = 0;
+            Self::Named(mut map) | Self::Normal(mut map) => {
+                let mut args = Vec::with_capacity(map.len());
                 let mut is_secure = false;
-                while index < size {
-                    let lit = map[&format!("arg{}", index)].clone();
-                    if lit.secure_variable {
-                        is_secure = true;
-                    }
+                for index in 0..map.len() {
+                    let lit = map.remove(&format!("arg{index}")).unwrap();
+                    is_secure |= lit.secure_variable;
                     let value =
-                        PrimitiveString::get_literal(&lit.primitive.to_string(), lit.interval);
+                        PrimitiveString::new(lit.primitive.to_string()).to_literal(lit.interval);
                     args.push(value);
-                    index += 1;
                 }
 
-                obj.insert(
+                let obj = HashMap::from([(
                     "args".to_owned(),
-                    PrimitiveArray::get_literal(&args, interval),
-                );
+                    PrimitiveArray::get_literal(args, interval),
+                )]);
 
-                let mut lit = PrimitiveObject::get_literal(&obj, interval);
+                let mut lit = PrimitiveObject::get_literal(obj, interval);
                 lit.secure_variable = is_secure;
                 lit.set_content_type("debug");
 
@@ -50,48 +45,97 @@ impl ArgsType {
         }
     }
 
-    pub fn args_to_log(&self) -> String {
+    #[must_use]
+    pub fn args_to_log(self) -> String {
+        const ERROR: &str = "secure variables can not be logged";
         match self {
-            Self::Named(map) | Self::Normal(map) => {
-                let mut args = vec![];
+            Self::Named(mut map) | Self::Normal(mut map) => {
                 let size = map.len();
-                let mut index = 0;
-                while index < size {
-                    let lit = map[&format!("arg{}", index)].clone();
+                if size == 0 {
+                    return String::new();
+                }
+
+                let lit = map.remove("arg0").unwrap();
+                if lit.secure_variable {
+                    return ERROR.to_string();
+                }
+                let mut result = lit.primitive.to_string();
+                for index in 1..size {
+                    let lit = map.remove(&format!("arg{index}")).unwrap();
                     if lit.secure_variable {
-                        return "secure variables can not be logged".to_string();
+                        return ERROR.to_string();
                     }
 
                     let value = lit.primitive.to_string();
-                    args.push(value);
-                    index += 1;
+                    result.push_str(", ");
+                    result.push_str(&value);
                 }
 
-                args.join(", ").to_string()
+                result
             }
         }
     }
 
-    pub fn get<'a>(&'a self, key: &str, index: usize) -> Option<&'a Literal> {
+    #[must_use]
+    pub fn get(&self, key: &str, index: usize) -> Option<&Literal> {
         match self {
             Self::Named(var) => {
                 match (var.get(key), index) {
                     (Some(val), _) => Some(val),
                     // tmp ?
-                    (None, 0) => var.get(&format!("arg{}", index)),
+                    (None, 0) => var.get(&format!("arg{index}")),
                     (None, _) => None,
                 }
             }
-            Self::Normal(var) => var.get(&format!("arg{}", index)),
+            Self::Normal(var) => var.get(&format!("arg{index}")),
         }
     }
 
+    #[must_use]
+    pub fn remove(&mut self, key: &str, index: usize) -> Option<Literal> {
+        match self {
+            Self::Named(var) => {
+                match (var.remove(key), index) {
+                    (Some(val), _) => Some(val),
+                    // tmp ?
+                    (None, 0) => var.remove(&format!("arg{index}")),
+                    (None, _) => None,
+                }
+            }
+            Self::Normal(var) => var.remove(&format!("arg{index}")),
+        }
+    }
+
+    #[must_use]
+    pub fn remove_typed(
+        &mut self,
+        key: &str,
+        index: usize,
+        expected_type: PrimitiveType,
+    ) -> Option<Literal> {
+        let entry = self.remove(key, index)?;
+        if entry.primitive.get_type() == expected_type {
+            Some(entry)
+        } else {
+            None
+        }
+    }
+
+    #[must_use]
     pub fn len(&self) -> usize {
         match self {
             Self::Named(var) | Self::Normal(var) => var.len(),
         }
     }
 
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        match self {
+            Self::Named(var) | Self::Normal(var) => var.is_empty(),
+        }
+    }
+
+    #[must_use]
     pub fn iter(&self) -> Iter<'_, String, Literal> {
         match self {
             Self::Named(var) | Self::Normal(var) => var.iter(),
@@ -107,25 +151,23 @@ impl ArgsType {
     ) -> Result<(), ErrorInfo> {
         match self {
             Self::Named(var) => {
-                for (key, value) in var.iter() {
+                for (key, value) in var {
                     if !vec.contains(&(key as &str)) && key != "arg0" {
-                        map.insert(key.to_owned(), value.to_owned());
+                        map.insert(key.clone(), value.clone());
                     }
                 }
-                Ok(())
             }
             Self::Normal(var) => {
                 if vec.len() < var.len() {
                     //TODO:: error msg
-                    Err(gen_error_info(
+                    return Err(gen_error_info(
                         Position::new(interval, flow_name),
                         "to many arguments".to_owned(),
-                    ))
-                } else {
-                    Ok(())
+                    ));
                 }
             }
         }
+        Ok(())
     }
 
     pub fn populate_json_to_literal(
@@ -137,7 +179,7 @@ impl ArgsType {
     ) -> Result<(), ErrorInfo> {
         match self {
             Self::Named(var) => {
-                for (key, value) in var.iter() {
+                for (key, value) in var {
                     let contains = vec.iter().find(|obj| {
                         if let Some(map) = obj.as_object() {
                             map.contains_key(key)
@@ -147,21 +189,96 @@ impl ArgsType {
                     });
 
                     if let (None, true) = (contains, key != "arg0") {
-                        map.insert(key.to_owned(), value.to_owned());
+                        map.insert(key.clone(), value.clone());
                     }
                 }
-                Ok(())
             }
             Self::Normal(var) => {
                 if vec.len() < var.len() {
-                    Err(gen_error_info(
+                    return Err(gen_error_info(
                         Position::new(interval, flow_name),
                         "to many arguments".to_owned(),
-                    ))
-                } else {
-                    Ok(())
+                    ));
                 }
             }
         }
+        Ok(())
+    }
+}
+
+impl<'a> IntoIterator for &'a ArgsType {
+    type Item = (&'a String, &'a Literal);
+    type IntoIter = Iter<'a, String, Literal>;
+    fn into_iter(self) -> Self::IntoIter {
+        self.iter()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_debug() {
+        let map = HashMap::from([
+            (
+                "arg0".to_owned(),
+                PrimitiveString::get_literal("test", Interval::default()),
+            ),
+            (
+                "arg1".to_owned(),
+                PrimitiveString::get_literal("test2", Interval::default()),
+            ),
+        ]);
+        let args = ArgsType::Named(map);
+
+        let result = args.args_to_debug(Interval::default());
+        let obj = HashMap::from([(
+            "args".to_owned(),
+            PrimitiveArray::get_literal(
+                vec![
+                    PrimitiveString::get_literal("test", Interval::default()),
+                    PrimitiveString::get_literal("test2", Interval::default()),
+                ],
+                Interval::default(),
+            ),
+        )]);
+        let expected = PrimitiveObject::get_literal(obj, Interval::default());
+        assert_eq!(result, expected);
+    }
+
+    #[test]
+    fn test_log() {
+        let mut map = HashMap::new();
+        map.insert(
+            "arg0".to_owned(),
+            PrimitiveString::get_literal("test", Interval::default()),
+        );
+        map.insert(
+            "arg1".to_owned(),
+            PrimitiveString::get_literal("test2", Interval::default()),
+        );
+        let args = ArgsType::Named(map);
+
+        let result = args.args_to_log();
+        let expected = "test, test2".to_string();
+        assert_eq!(result, expected);
+    }
+
+    #[test]
+    fn test_log_secure() {
+        let mut map = HashMap::new();
+        map.insert(
+            "arg0".to_owned(),
+            PrimitiveString::get_literal("insecure", Interval::default()),
+        );
+        let mut secure = PrimitiveString::get_literal("secure", Interval::default());
+        secure.secure_variable = true;
+        map.insert("arg1".to_owned(), secure);
+        let args = ArgsType::Named(map);
+
+        let result = args.args_to_log();
+        let expected = "secure variables can not be logged".to_string();
+        assert_eq!(result, expected);
     }
 }

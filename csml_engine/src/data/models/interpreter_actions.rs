@@ -1,0 +1,16 @@
+use uuid::Uuid;
+
+#[derive(Debug, Clone)]
+pub enum InterpreterReturn {
+    Continue,
+    End,
+    SwitchBot(SwitchBot),
+}
+
+#[derive(Debug, Clone)]
+pub struct SwitchBot {
+    pub bot_id: String,
+    pub version_id: Option<Uuid>,
+    pub flow: Option<String>,
+    pub step: String,
+}

@@ -1,5 +1,5 @@
 use crate::data::{ast::Interval, position::Position};
-use crate::error_format::*;
+use crate::error_format::{ERROR_DIGEST_ALGO, ERROR_HASH_ALGO, ErrorInfo, gen_error_info};
 
 pub fn get_hash_algorithm(
     algo: &str,
@@ -26,7 +26,7 @@ pub fn get_hash_algorithm(
 
         _ => Err(gen_error_info(
             Position::new(interval, flow_name),
-            format!("'{}' {}", algo, ERROR_HASH_ALGO),
+            format!("'{algo}' {ERROR_HASH_ALGO}"),
         )),
     }
 }
@@ -42,7 +42,7 @@ pub fn digest_data(
         "base64" => Ok(openssl::base64::encode_block(data)),
         _ => Err(gen_error_info(
             Position::new(interval, flow_name),
-            format!("'{}' {}", algo, ERROR_DIGEST_ALGO),
+            format!("'{algo}' {ERROR_DIGEST_ALGO}"),
         )),
     }
 }

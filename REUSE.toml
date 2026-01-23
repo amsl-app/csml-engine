@@ -1,0 +1,29 @@
+version = 1
+
+[[annotations]]
+path = [
+    "csml_engine_db/**",
+    "csml_engine_entity/**",
+    "csml_migrations/**",
+    "csml_model/**",
+    "test_helpers/**",
+    ".gitignore",
+    "Cargo.toml",
+    "README.md"
+]
+precedence = "override"
+SPDX-FileCopyrightText = [
+    "2023 Sven Scheu",
+    "Amsl Contributors",
+]
+SPDX-License-Identifier = "MIT OR Apache-2.0"
+
+[[annotations]]
+path = ["csml_engine/**", "csml_interpreter/**"]
+precedence = "override"
+SPDX-FileCopyrightText = [
+    "2020 CSML / language",
+    "2023 Sven Scheu",
+    "Amsl Contributors",
+]
+SPDX-License-Identifier = "Apache-2.0"

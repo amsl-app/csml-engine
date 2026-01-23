@@ -1,5 +1,5 @@
-use crate::data::primitive::PrimitiveObject;
 use crate::data::Literal;
+use crate::data::primitive::PrimitiveObject;
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum MemoryType {
@@ -17,18 +17,20 @@ pub struct Memory {
 }
 
 impl Memory {
+    #[must_use]
     pub fn new(key: String, value: Literal) -> Self {
-        let content_type = &value.content_type;
+        let mut formatted_value = value.primitive.format_mem(&value.content_type, true);
 
-        let value = if let Some(obj) = value.additional_info {
-            serde_json::json!({
+        if let Some(obj) = value.additional_info {
+            formatted_value = serde_json::json!({
                 "_additional_info": PrimitiveObject::obj_literal_to_json(&obj),
-                "value": value.primitive.format_mem(content_type, true)
-            })
-        } else {
-            value.primitive.format_mem(content_type, true)
-        };
+                "value": formatted_value
+            });
+        }
 
-        Self { key, value }
+        Self {
+            key,
+            value: formatted_value,
+        }
     }
 }

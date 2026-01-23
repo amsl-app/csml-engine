@@ -1,4 +1,8 @@
-use crate::data::{ast::*, tokens::*, Literal};
+use crate::data::{
+    Literal,
+    ast::Expr,
+    tokens::{FALSE, NULL, Span, TRUE},
+};
 use crate::parser::tools::get_string;
 use crate::parser::tools::get_tag;
 use crate::parser::{parse_comments::comment, tools::get_interval};
@@ -7,32 +11,32 @@ use crate::data::primitive::{
     boolean::PrimitiveBoolean, float::PrimitiveFloat, int::PrimitiveInt, null::PrimitiveNull,
 };
 use nom::{
+    IResult, Parser,
     branch::alt,
     bytes::complete::tag,
     character::complete::{char, one_of},
     combinator::{opt, recognize},
     error::{ContextError, ParseError},
     multi::{many0, many1},
-    sequence::{preceded, terminated, tuple},
-    IResult,
+    sequence::{preceded, terminated},
 };
 
 ////////////////////////////////////////////////////////////////////////////////
 // PRIVATE FUNCTIONS
 ////////////////////////////////////////////////////////////////////////////////
 
-fn signed_digits<'a, E>(s: Span<'a>) -> IResult<Span<'a>, Span, E>
+fn signed_digits<'a, E>(s: Span<'a>) -> IResult<Span<'a>, Span<'a>, E>
 where
     E: ParseError<Span<'a>> + ContextError<Span<'a>>,
 {
-    recognize(tuple((opt(one_of("+-")), decimal)))(s)
+    recognize((opt(one_of("+-")), decimal)).parse(s)
 }
 
-fn decimal<'a, E>(s: Span<'a>) -> IResult<Span<'a>, Span, E>
+fn decimal<'a, E>(s: Span<'a>) -> IResult<Span<'a>, Span<'a>, E>
 where
     E: ParseError<Span<'a>> + ContextError<Span<'a>>,
 {
-    recognize(many1(terminated(one_of("0123456789"), many0(char('_')))))(s)
+    recognize(many1(terminated(one_of("0123456789"), many0(char('_'))))).parse(s)
 }
 
 fn parse_integer<'a, E>(s: Span<'a>) -> IResult<Span<'a>, Expr, E>
@@ -55,13 +59,10 @@ where
 {
     alt((
         // Case one: .42
-        recognize(tuple((char('.'), decimal))), // Case two: 42.42
-        recognize(tuple((
-            opt(one_of("+-")),
-            decimal,
-            preceded(char('.'), decimal),
-        ))),
-    ))(s)
+        recognize((char('.'), decimal)), // Case two: 42.42
+        recognize((opt(one_of("+-")), decimal, preceded(char('.'), decimal))),
+    ))
+    .parse(s)
 }
 
 fn parse_float<'a, E>(s: Span<'a>) -> IResult<Span<'a>, Expr, E>
@@ -84,7 +85,7 @@ fn parse_number<'a, E>(s: Span<'a>) -> IResult<Span<'a>, Expr, E>
 where
     E: ParseError<Span<'a>> + ContextError<Span<'a>>,
 {
-    alt((parse_float, parse_integer))(s)
+    alt((parse_float, parse_integer)).parse(s)
 }
 
 fn parse_true<'a, E>(s: Span<'a>) -> IResult<Span<'a>, PrimitiveBoolean, E>
@@ -110,7 +111,7 @@ where
     E: ParseError<Span<'a>> + ContextError<Span<'a>>,
 {
     let (s, interval) = get_interval(s)?;
-    let (s, boolean) = alt((parse_true, parse_false))(s)?;
+    let (s, boolean) = alt((parse_true, parse_false)).parse(s)?;
 
     let primitive = Box::new(boolean);
     let expression = Expr::LitExpr {
@@ -132,8 +133,8 @@ where
     E: ParseError<Span<'a>> + ContextError<Span<'a>>,
 {
     let (s, interval) = get_interval(s)?;
-    let (s, name) = preceded(comment, get_string)(s)?;
-    let (s, _) = get_tag(name.to_ascii_lowercase(), NULL)(s)?;
+    let (s, name) = preceded(comment, get_string).parse(s)?;
+    let (s, ()) = get_tag(name.to_ascii_lowercase(), NULL)(s)?;
 
     let expression = Expr::LitExpr {
         literal: PrimitiveNull::get_literal(interval),
@@ -163,7 +164,7 @@ where
     E: ParseError<Span<'a>> + ContextError<Span<'a>>,
 {
     // TODO: span: preceded( comment ,  position!() ?
-    preceded(comment, alt((parse_number, parse_boolean, parse_null)))(s)
+    preceded(comment, alt((parse_number, parse_boolean, parse_null))).parse(s)
 }
 
 ////////////////////////////////////////////////////////////////////////////////
@@ -177,68 +178,48 @@ mod tests {
 
     pub fn test_literal(s: Span) -> IResult<Span, Expr> {
         let var = parse_literal_expr(s);
-        if let Ok((s, v)) = var {
-            if !s.fragment().is_empty() {
-                Err(Err::Error(nom::error::Error::new(s, ErrorKind::Tag)))
-            } else {
+        var.and_then(|(s, v)| {
+            if s.fragment().is_empty() {
                 Ok((s, v))
+            } else {
+                Err(Err::Error(error::Error::new(s, ErrorKind::Tag)))
             }
-        } else {
-            var
-        }
+        })
     }
 
     #[test]
     fn ok_int() {
         let string = Span::new(" +42");
-        match test_literal(string) {
-            Ok(..) => {}
-            Err(e) => panic!("{:?}", e),
-        }
+        test_literal(string).unwrap();
     }
 
     #[test]
     fn ok_float() {
         let string = Span::new(" -42.42");
-        match test_literal(string) {
-            Ok(..) => {}
-            Err(e) => panic!("{:?}", e),
-        }
+        test_literal(string).unwrap();
     }
 
     #[test]
     fn ok_bool() {
         let string = Span::new(" true");
-        match test_literal(string) {
-            Ok(..) => {}
-            Err(e) => panic!("{:?}", e),
-        }
+        test_literal(string).unwrap();
     }
 
     #[test]
     fn err_sign() {
         let string = Span::new(" +++++4");
-        match test_literal(string) {
-            Ok(..) => panic!("need to fail"),
-            Err(..) => {}
-        }
+        test_literal(string).expect_err("need to fail");
     }
 
     #[test]
     fn err_float1() {
         let string = Span::new(" 2.2.2");
-        match test_literal(string) {
-            Ok(..) => panic!("need to fail"),
-            Err(..) => {}
-        }
+        test_literal(string).expect_err("need to fail");
     }
 
     #[test]
     fn err_float2() {
         let string = Span::new(" 3,2 ");
-        match test_literal(string) {
-            Ok(ok) => panic!("need to fail {:?}", ok),
-            Err(..) => {}
-        }
+        test_literal(string).expect_err("need to fail");
     }
 }

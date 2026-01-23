@@ -1,10 +1,10 @@
 mod support;
 
+use csml_interpreter::data::MessageData;
 use csml_interpreter::data::context::Context;
 use csml_interpreter::data::csml_bot::CsmlBot;
 use csml_interpreter::data::csml_flow::CsmlFlow;
 use csml_interpreter::data::event::Event;
-use csml_interpreter::data::MessageData;
 use csml_interpreter::interpret;
 use std::collections::HashMap;
 
@@ -22,11 +22,11 @@ const DEFAULT_BOT_NAME: &str = "my_bot";
 ////////////////////////////////////////////////////////////////////////////////
 
 fn format_message(
-    event: Event,
+    event: &Event,
     context: Context,
     vector: &[&str],
-    custom_components: serde_json::Value,
-) -> MessageData {
+    custom_components: &Value,
+) -> Box<MessageData> {
     let default_content = read_file(vector[0].to_string()).unwrap();
     let default_flow = CsmlFlow::new(DEFAULT_ID_NAME, "default", &default_content, Vec::default());
 
@@ -36,10 +36,7 @@ fn format_message(
         None,
         vec![default_flow],
         None,
-        Some(serde_json::json!(custom_components
-            .as_object()
-            .unwrap()
-            .to_owned())),
+        Some(serde_json::json!(custom_components.as_object().unwrap())),
         DEFAULT_FLOW_NAME,
         None,
         None,
@@ -48,7 +45,7 @@ fn format_message(
         None,
     );
 
-    interpret(bot, context, event, None)
+    interpret(&bot, context, event, None)
 }
 
 ////////////////////////////////////////////////////////////////////////////////
@@ -68,7 +65,7 @@ fn empty() {
 	}
 	]}"#;
     let msg = format_message(
-        Event::new("payload", "", serde_json::json!({})),
+        &Event::new("payload", "", serde_json::json!({})),
         Context::new(
             HashMap::new(),
             HashMap::new(),
@@ -78,8 +75,8 @@ fn empty() {
             DEFAULT_FLOW_NAME,
             None,
         ),
-        &vec!["CSML/basic_test/generic_component.csml"],
-        serde_json::json!({"Button": {}}),
+        &["CSML/basic_test/generic_component.csml"],
+        &serde_json::json!({"Button": {}}),
     );
 
     let v1: Value = message_to_json_value(msg);
@@ -97,7 +94,7 @@ fn default() {
 	}
 	]}"#;
     let msg = format_message(
-        Event::new("payload", "", serde_json::json!({})),
+        &Event::new("payload", "", serde_json::json!({})),
         Context::new(
             HashMap::new(),
             HashMap::new(),
@@ -107,8 +104,8 @@ fn default() {
             DEFAULT_FLOW_NAME,
             None,
         ),
-        &vec!["CSML/basic_test/generic_component.csml"],
-        serde_json::json!({
+        &["CSML/basic_test/generic_component.csml"],
+        &serde_json::json!({
             "Button": {
                 "params": [
                     {
@@ -156,7 +153,7 @@ fn test_all() {
         }
         ]}"#;
     let msg = format_message(
-        Event::new("payload", "", serde_json::json!({})),
+        &Event::new("payload", "", serde_json::json!({})),
         Context::new(
             HashMap::new(),
             HashMap::new(),
@@ -166,8 +163,8 @@ fn test_all() {
             DEFAULT_FLOW_NAME,
             None,
         ),
-        &vec!["CSML/basic_test/generic_component.csml"],
-        serde_json::json!({
+        &["CSML/basic_test/generic_component.csml"],
+        &serde_json::json!({
             "Button": {
                 "params": [
                     {
@@ -224,7 +221,7 @@ fn default_set() {
 	}
 	]}"#;
     let msg = format_message(
-        Event::new("payload", "", serde_json::json!({})),
+        &Event::new("payload", "", serde_json::json!({})),
         Context::new(
             HashMap::new(),
             HashMap::new(),
@@ -234,8 +231,8 @@ fn default_set() {
             DEFAULT_FLOW_NAME,
             None,
         ),
-        &vec!["CSML/basic_test/generic_component.csml"],
-        serde_json::json!({
+        &["CSML/basic_test/generic_component.csml"],
+        &serde_json::json!({
             "Button": {
                 "params": [
                     {
@@ -270,7 +267,7 @@ fn default_get() {
 	}
 	]}"#;
     let msg = format_message(
-        Event::new("payload", "", serde_json::json!({})),
+        &Event::new("payload", "", serde_json::json!({})),
         Context::new(
             HashMap::new(),
             HashMap::new(),
@@ -280,8 +277,8 @@ fn default_get() {
             DEFAULT_FLOW_NAME,
             None,
         ),
-        &vec!["CSML/basic_test/generic_component.csml"],
-        serde_json::json!({
+        &["CSML/basic_test/generic_component.csml"],
+        &serde_json::json!({
             "Button": {
                 "params": [
                     {
@@ -328,7 +325,7 @@ fn default_multiple_get() {
 	}
 	]}"#;
     let msg = format_message(
-        Event::new("payload", "", serde_json::json!({})),
+        &Event::new("payload", "", serde_json::json!({})),
         Context::new(
             HashMap::new(),
             HashMap::new(),
@@ -338,8 +335,8 @@ fn default_multiple_get() {
             DEFAULT_FLOW_NAME,
             None,
         ),
-        &vec!["CSML/basic_test/generic_component.csml"],
-        serde_json::json!({
+        &["CSML/basic_test/generic_component.csml"],
+        &serde_json::json!({
             "Button": {
                 "params": [
                     {
@@ -383,7 +380,7 @@ fn default_add_value() {
 	}
 	]}"#;
     let msg = format_message(
-        Event::new("payload", "", serde_json::json!({})),
+        &Event::new("payload", "", serde_json::json!({})),
         Context::new(
             HashMap::new(),
             HashMap::new(),
@@ -393,8 +390,8 @@ fn default_add_value() {
             DEFAULT_FLOW_NAME,
             None,
         ),
-        &vec!["CSML/basic_test/generic_component.csml"],
-        serde_json::json!({
+        &["CSML/basic_test/generic_component.csml"],
+        &serde_json::json!({
             "Button": {
                 "params": [
                     {
@@ -432,7 +429,7 @@ fn default_add_value_empty() {
         ]
     }"#;
     let msg = format_message(
-        Event::new("payload", "", serde_json::json!({})),
+        &Event::new("payload", "", serde_json::json!({})),
         Context::new(
             HashMap::new(),
             HashMap::new(),
@@ -442,8 +439,8 @@ fn default_add_value_empty() {
             DEFAULT_FLOW_NAME,
             None,
         ),
-        &vec!["CSML/basic_test/generic_component.csml"],
-        serde_json::json!({
+        &["CSML/basic_test/generic_component.csml"],
+        &serde_json::json!({
             "Button": {
                 "params": [
                     {
@@ -484,7 +481,7 @@ fn parameter() {
         ]
     }"#;
     let msg = format_message(
-        Event::new("payload", "", serde_json::json!({})),
+        &Event::new("payload", "", serde_json::json!({})),
         Context::new(
             HashMap::new(),
             HashMap::new(),
@@ -494,8 +491,8 @@ fn parameter() {
             DEFAULT_FLOW_NAME,
             None,
         ),
-        &vec!["CSML/basic_test/generic_component.csml"],
-        serde_json::json!({
+        &["CSML/basic_test/generic_component.csml"],
+        &serde_json::json!({
             "Button": {
                 "params": [
                     {
@@ -549,7 +546,7 @@ fn parameter_multiple() {
         ]
     }"#;
     let msg = format_message(
-        Event::new("payload", "", serde_json::json!({})),
+        &Event::new("payload", "", serde_json::json!({})),
         Context::new(
             HashMap::new(),
             HashMap::new(),
@@ -559,8 +556,8 @@ fn parameter_multiple() {
             DEFAULT_FLOW_NAME,
             None,
         ),
-        &vec!["CSML/basic_test/generic_component.csml"],
-        serde_json::json!({
+        &["CSML/basic_test/generic_component.csml"],
+        &serde_json::json!({
             "Button": {
                 "params": [
                     {
@@ -611,7 +608,7 @@ fn parameter_multiple() {
 #[test]
 fn unknown_component() {
     let msg = format_message(
-        Event::new("payload", "", serde_json::json!({})),
+        &Event::new("payload", "", serde_json::json!({})),
         Context::new(
             HashMap::new(),
             HashMap::new(),
@@ -621,8 +618,8 @@ fn unknown_component() {
             DEFAULT_FLOW_NAME,
             None,
         ),
-        &vec!["CSML/basic_test/generic_component.csml"],
-        serde_json::json!({
+        &["CSML/basic_test/generic_component.csml"],
+        &serde_json::json!({
             "Button": {
                 "params": [
                     {
@@ -639,17 +636,13 @@ fn unknown_component() {
         }),
     );
 
-    if msg.messages[0].content_type == "error" {
-        return assert!(true);
-    }
-
-    assert!(false);
+    assert_eq!(msg.messages[0].content_type, "error");
 }
 
 #[test]
 fn missing_type() {
     let msg = format_message(
-        Event::new("payload", "", serde_json::json!({})),
+        &Event::new("payload", "", serde_json::json!({})),
         Context::new(
             HashMap::new(),
             HashMap::new(),
@@ -659,8 +652,8 @@ fn missing_type() {
             DEFAULT_FLOW_NAME,
             None,
         ),
-        &vec!["CSML/basic_test/generic_component.csml"],
-        serde_json::json!({
+        &["CSML/basic_test/generic_component.csml"],
+        &serde_json::json!({
             "Button": {
                 "params": [
                     {
@@ -676,17 +669,13 @@ fn missing_type() {
         }),
     );
 
-    if msg.messages[0].content_type == "error" {
-        return assert!(true);
-    }
-
-    assert!(false);
+    assert_eq!(msg.messages[0].content_type, "error");
 }
 
 #[test]
 fn illegal_operation_default() {
     let msg = format_message(
-        Event::new("payload", "", serde_json::json!({})),
+        &Event::new("payload", "", serde_json::json!({})),
         Context::new(
             HashMap::new(),
             HashMap::new(),
@@ -696,8 +685,8 @@ fn illegal_operation_default() {
             DEFAULT_FLOW_NAME,
             None,
         ),
-        &vec!["CSML/basic_test/generic_component.csml"],
-        serde_json::json!({
+        &["CSML/basic_test/generic_component.csml"],
+        &serde_json::json!({
             "Button": {
                 "params": [
                     {
@@ -715,17 +704,13 @@ fn illegal_operation_default() {
         }),
     );
 
-    if msg.messages[0].content_type == "error" {
-        return assert!(true);
-    }
-
-    assert!(false);
+    assert_eq!(msg.messages[0].content_type, "error");
 }
 
 #[test]
 fn illegal_operation_add() {
     let msg = format_message(
-        Event::new("payload", "", serde_json::json!({})),
+        &Event::new("payload", "", serde_json::json!({})),
         Context::new(
             HashMap::new(),
             HashMap::new(),
@@ -735,8 +720,8 @@ fn illegal_operation_add() {
             DEFAULT_FLOW_NAME,
             None,
         ),
-        &vec!["CSML/basic_test/generic_component.csml"],
-        serde_json::json!({
+        &["CSML/basic_test/generic_component.csml"],
+        &serde_json::json!({
             "Button": {
                 "params": [
                     {
@@ -754,17 +739,13 @@ fn illegal_operation_add() {
         }),
     );
 
-    if msg.messages[0].content_type == "error" {
-        return assert!(true);
-    }
-
-    assert!(false);
+    assert_eq!(msg.messages[0].content_type, "error");
 }
 
 #[test]
 fn illegal_operation_parameter() {
     let msg = format_message(
-        Event::new("payload", "", serde_json::json!({})),
+        &Event::new("payload", "", serde_json::json!({})),
         Context::new(
             HashMap::new(),
             HashMap::new(),
@@ -774,8 +755,8 @@ fn illegal_operation_parameter() {
             DEFAULT_FLOW_NAME,
             None,
         ),
-        &vec!["CSML/basic_test/generic_component.csml"],
-        serde_json::json!({
+        &["CSML/basic_test/generic_component.csml"],
+        &serde_json::json!({
             "Button": {
                 "params": [
                     {
@@ -793,17 +774,13 @@ fn illegal_operation_parameter() {
         }),
     );
 
-    if msg.messages[0].content_type == "error" {
-        return assert!(true);
-    }
-
-    assert!(false);
+    assert_eq!(msg.messages[0].content_type, "error");
 }
 
 #[test]
-fn circular_dependencie_on_other_key_default() {
+fn circular_dependencies_on_other_key_default() {
     let msg = format_message(
-        Event::new("payload", "", serde_json::json!({})),
+        &Event::new("payload", "", serde_json::json!({})),
         Context::new(
             HashMap::new(),
             HashMap::new(),
@@ -813,8 +790,8 @@ fn circular_dependencie_on_other_key_default() {
             DEFAULT_FLOW_NAME,
             None,
         ),
-        &vec!["CSML/basic_test/generic_component.csml"],
-        serde_json::json!({
+        &["CSML/basic_test/generic_component.csml"],
+        &serde_json::json!({
             "Button": {
                 "params": [
                     {
@@ -842,17 +819,13 @@ fn circular_dependencie_on_other_key_default() {
         }),
     );
 
-    if msg.messages[0].content_type == "error" {
-        return assert!(true);
-    }
-
-    assert!(false);
+    assert_eq!(msg.messages[0].content_type, "error");
 }
 
 #[test]
-fn circular_dependencie_on_self_default() {
+fn circular_dependencies_on_self_default() {
     let msg = format_message(
-        Event::new("payload", "", serde_json::json!({})),
+        &Event::new("payload", "", serde_json::json!({})),
         Context::new(
             HashMap::new(),
             HashMap::new(),
@@ -862,8 +835,8 @@ fn circular_dependencie_on_self_default() {
             DEFAULT_FLOW_NAME,
             None,
         ),
-        &vec!["CSML/basic_test/generic_component.csml"],
-        serde_json::json!({
+        &["CSML/basic_test/generic_component.csml"],
+        &serde_json::json!({
             "Button": {
                 "params": [
                     {
@@ -881,17 +854,13 @@ fn circular_dependencie_on_self_default() {
         }),
     );
 
-    if msg.messages[0].content_type == "error" {
-        return assert!(true);
-    }
-
-    assert!(false);
+    assert_eq!(msg.messages[0].content_type, "error");
 }
 
 #[test]
-fn circular_dependencie_on_other_key_add() {
+fn circular_dependencies_on_other_key_add() {
     let msg = format_message(
-        Event::new("payload", "", serde_json::json!({})),
+        &Event::new("payload", "", serde_json::json!({})),
         Context::new(
             HashMap::new(),
             HashMap::new(),
@@ -901,8 +870,8 @@ fn circular_dependencie_on_other_key_add() {
             DEFAULT_FLOW_NAME,
             None,
         ),
-        &vec!["CSML/basic_test/generic_component.csml"],
-        serde_json::json!({
+        &["CSML/basic_test/generic_component.csml"],
+        &serde_json::json!({
             "Button": {
                 "params": [
                     {
@@ -930,17 +899,13 @@ fn circular_dependencie_on_other_key_add() {
         }),
     );
 
-    if msg.messages[0].content_type == "error" {
-        return assert!(true);
-    }
-
-    assert!(false);
+    assert_eq!(msg.messages[0].content_type, "error");
 }
 
 #[test]
-fn circular_dependencie_on_self_add() {
+fn circular_dependencies_on_self_add() {
     let msg = format_message(
-        Event::new("payload", "", serde_json::json!({})),
+        &Event::new("payload", "", serde_json::json!({})),
         Context::new(
             HashMap::new(),
             HashMap::new(),
@@ -950,8 +915,8 @@ fn circular_dependencie_on_self_add() {
             DEFAULT_FLOW_NAME,
             None,
         ),
-        &vec!["CSML/basic_test/generic_component.csml"],
-        serde_json::json!({
+        &["CSML/basic_test/generic_component.csml"],
+        &serde_json::json!({
             "Button": {
                 "params": [
                     {
@@ -969,17 +934,13 @@ fn circular_dependencie_on_self_add() {
         }),
     );
 
-    if msg.messages[0].content_type == "error" {
-        return assert!(true);
-    }
-
-    assert!(false);
+    assert_eq!(msg.messages[0].content_type, "error");
 }
 
 #[test]
 fn missing_parameter() {
     let msg = format_message(
-        Event::new("payload", "", serde_json::json!({})),
+        &Event::new("payload", "", serde_json::json!({})),
         Context::new(
             HashMap::new(),
             HashMap::new(),
@@ -989,8 +950,8 @@ fn missing_parameter() {
             DEFAULT_FLOW_NAME,
             None,
         ),
-        &vec!["CSML/basic_test/generic_component.csml"],
-        serde_json::json!({
+        &["CSML/basic_test/generic_component.csml"],
+        &serde_json::json!({
             "Button": {
                 "params": [
                     {
@@ -1008,9 +969,5 @@ fn missing_parameter() {
         }),
     );
 
-    if msg.messages[0].content_type == "error" {
-        return assert!(true);
-    }
-
-    assert!(false);
+    assert_eq!(msg.messages[0].content_type, "error");
 }

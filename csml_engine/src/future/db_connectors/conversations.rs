@@ -1,262 +1,217 @@
 #[cfg(feature = "postgresql-async")]
-use crate::future::db_connectors::{is_postgresql, postgresql_connector};
+use crate::future::db_connectors::postgresql_connector;
+#[cfg(feature = "sea-orm")]
+use crate::future::db_connectors::sea_orm_connector;
+
 use uuid::Uuid;
 
-use csml_interpreter::data::csml_logs::{csml_logger, CsmlLog, LogLvl};
-
-use crate::error_messages::ERROR_DB_SETUP;
-use crate::future::db_connectors::{state, utils::*};
-use crate::{data, AsyncConversationInfo, AsyncDatabase, Client, EngineError};
 use crate::data::models::Conversation;
 
-pub async fn create_conversation(
+use crate::db_connectors::utils::get_expires_at;
+
+use crate::data::{AsyncDatabase, EngineError, SeaOrmDbTraits};
+
+use crate::future::db_connectors::state;
+use crate::{Client, data};
+use std::error::Error;
+
+pub async fn create_conversation<T: SeaOrmDbTraits>(
     flow_id: &str,
     step_id: &str,
     client: &Client,
     ttl: Option<chrono::Duration>,
-    db: &mut AsyncDatabase<'_>,
+    db: &mut AsyncDatabase<'_, T>,
 ) -> Result<Uuid, EngineError> {
-    csml_logger(
-        CsmlLog::new(
-            None,
-            None,
-            None,
-            format!(
-                "db call create conversation flow_id: {}, step_id:{}",
-                flow_id, step_id
-            ),
-        ),
-        LogLvl::Info,
-    );
-    csml_logger(
-        CsmlLog::new(
-            Some(client),
-            None,
-            None,
-            format!(
-                "db call create conversation flow_id: {}, step_id:{}",
-                flow_id, step_id
-            ),
-        ),
-        LogLvl::Debug,
-    );
+    tracing::debug!(?client, %flow_id, %step_id, "creating conversation");
 
-    #[cfg(feature = "postgresql-async")]
-    if is_postgresql() {
-        let db = postgresql_connector::get_db(db)?;
-        let expires_at = get_expires_at_for_postgresql(ttl);
-        return postgresql_connector::conversations::create_conversation(
-            flow_id, step_id, client, expires_at, db,
-        )
-        .await;
+    match db {
+        #[cfg(feature = "postgresql-async")]
+        AsyncDatabase::Postgresql(db) => {
+            postgresql_connector::conversations::create_conversation(
+                flow_id,
+                step_id,
+                client,
+                get_expires_at(ttl),
+                db,
+            )
+            .await
+        }
+        #[cfg(feature = "sea-orm")]
+        AsyncDatabase::SeaOrm(db) => {
+            sea_orm_connector::conversations::create_conversation(
+                flow_id,
+                step_id,
+                client,
+                get_expires_at(ttl),
+                db.db_ref(),
+            )
+            .await
+        }
+        #[cfg(not(feature = "sea-orm"))]
+        AsyncDatabase::_Impossible(_, _) => unreachable!(),
     }
-
-    Err(EngineError::Manager(ERROR_DB_SETUP.to_owned()))
 }
 
-pub async fn close_conversation(
+pub async fn close_conversation<T: SeaOrmDbTraits>(
     id: Uuid,
     client: &Client,
-    db: &mut AsyncDatabase<'_>,
+    db: &mut AsyncDatabase<'_, T>,
 ) -> Result<(), EngineError> {
-    csml_logger(
-        CsmlLog::new(
-            None,
-            None,
-            None,
-            format!("db call close conversation conversation_id: {}", id),
-        ),
-        LogLvl::Info,
-    );
-    csml_logger(
-        CsmlLog::new(
-            Some(client),
-            None,
-            None,
-            format!("db call close conversation conversation_id: {}", id),
-        ),
-        LogLvl::Debug,
-    );
+    tracing::debug!(%id, ?client, "closing conversation");
 
     // delete previous bot info at the end of the conversation
     state::delete_state_key(client, "bot", "previous", db).await?;
 
-    #[cfg(feature = "postgresql-async")]
-    if is_postgresql() {
-        let db = postgresql_connector::get_db(db)?;
-        return postgresql_connector::conversations::close_conversation(id, client, "CLOSED", db)
-            .await;
+    match db {
+        #[cfg(feature = "postgresql-async")]
+        AsyncDatabase::Postgresql(db) => {
+            postgresql_connector::conversations::close_conversation(id, "CLOSED", db).await
+        }
+        #[cfg(feature = "sea-orm")]
+        AsyncDatabase::SeaOrm(db) => {
+            sea_orm_connector::conversations::close_conversation(id, db.db_ref()).await
+        }
+        #[cfg(not(feature = "sea-orm"))]
+        AsyncDatabase::_Impossible(_, _) => unreachable!(),
     }
-
-    Err(EngineError::Manager(ERROR_DB_SETUP.to_owned()))
 }
 
-pub async fn close_all_conversations(
+pub async fn close_all_conversations<T: SeaOrmDbTraits>(
     client: &Client,
-    db: &mut AsyncDatabase<'_>,
+    db: &mut AsyncDatabase<'_, T>,
 ) -> Result<(), EngineError> {
-    csml_logger(
-        CsmlLog::new(
-            None,
-            None,
-            None,
-            "db call close all conversations".to_string(),
-        ),
-        LogLvl::Info,
-    );
-    csml_logger(
-        CsmlLog::new(
-            Some(client),
-            None,
-            None,
-            format!("db call close all conversations, client: {:?}", client),
-        ),
-        LogLvl::Debug,
-    );
+    tracing::debug!(?client, "closing all conversations");
 
-    #[cfg(feature = "postgresql-async")]
-    if is_postgresql() {
-        let db = postgresql_connector::get_db(db)?;
-        return postgresql_connector::conversations::close_all_conversations(client, db).await;
+    match db {
+        #[cfg(feature = "postgresql-async")]
+        AsyncDatabase::Postgresql(db) => {
+            postgresql_connector::conversations::close_all_conversations(client, db).await
+        }
+        #[cfg(feature = "sea-orm")]
+        AsyncDatabase::SeaOrm(db) => {
+            sea_orm_connector::conversations::close_all_conversations(client, db.db_ref()).await
+        }
+        #[cfg(not(feature = "sea-orm"))]
+        AsyncDatabase::_Impossible(_, _) => unreachable!(),
     }
-
-    Err(EngineError::Manager(ERROR_DB_SETUP.to_owned()))
 }
 
-pub async fn get_latest_open(
+pub async fn get_latest_open<T: SeaOrmDbTraits>(
     client: &Client,
-    db: &mut AsyncDatabase<'_>,
+    db: &mut AsyncDatabase<'_, T>,
 ) -> Result<Option<Conversation>, EngineError> {
-    csml_logger(
-        CsmlLog::new(
-            None,
-            None,
-            None,
-            "db call get latest open conversations".to_string(),
-        ),
-        LogLvl::Info,
-    );
-    csml_logger(
-        CsmlLog::new(
-            Some(client),
-            None,
-            None,
-            "db call get latest open conversations".to_string(),
-        ),
-        LogLvl::Debug,
-    );
+    tracing::debug!(?client, "getting latest open conversation");
 
-    #[cfg(feature = "postgresql-async")]
-    if is_postgresql() {
-        let db = postgresql_connector::get_db(db)?;
-        return postgresql_connector::conversations::get_latest_open(client, db).await;
+    match db {
+        #[cfg(feature = "postgresql-async")]
+        AsyncDatabase::Postgresql(db) => {
+            postgresql_connector::conversations::get_latest_open(client, db).await
+        }
+        #[cfg(feature = "sea-orm")]
+        AsyncDatabase::SeaOrm(db) => {
+            sea_orm_connector::conversations::get_latest_open(client, db.db_ref()).await
+        }
+        #[cfg(not(feature = "sea-orm"))]
+        AsyncDatabase::_Impossible(_, _) => unreachable!(),
     }
-
-    Err(EngineError::Manager(ERROR_DB_SETUP.to_owned()))
 }
 
-pub async fn update_conversation(
-    data: &mut AsyncConversationInfo<'_>,
-    flow_id: Option<String>,
-    step_id: Option<String>,
+pub async fn update_conversation<T: SeaOrmDbTraits>(
+    conversation_id: Uuid,
+    flow_id: Option<&str>,
+    step_id: Option<&str>,
+    db: &mut AsyncDatabase<'_, T>,
 ) -> Result<(), EngineError> {
-    csml_logger(
-        CsmlLog::new(
-            None,
-            None,
-            None,
-            format!(
-                "db call update conversations flow_id {:?}, step_id {:?}",
-                flow_id, step_id
-            ),
-        ),
-        LogLvl::Info,
-    );
-    csml_logger(
-        CsmlLog::new(
-            Some(&data.client),
-            None,
-            None,
-            format!(
-                "db call update conversations flow_id {:?}, step_id {:?}",
-                flow_id, step_id
-            ),
-        ),
-        LogLvl::Debug,
+    tracing::debug!(
+        %conversation_id, ?flow_id, ?step_id, "updating conversation"
     );
 
-    #[cfg(feature = "postgresql-async")]
-    if is_postgresql() {
-        let db = postgresql_connector::get_db(&mut data.db)?;
-        return postgresql_connector::conversations::update_conversation(
-            data.conversation_id,
-            flow_id,
-            step_id,
-            db,
-        )
-        .await;
+    match db {
+        #[cfg(feature = "postgresql-async")]
+        AsyncDatabase::Postgresql(db) => {
+            postgresql_connector::conversations::update_conversation(
+                conversation_id,
+                flow_id,
+                step_id,
+                db,
+            )
+            .await
+        }
+        #[cfg(feature = "sea-orm")]
+        AsyncDatabase::SeaOrm(db) => {
+            sea_orm_connector::conversations::update_conversation(
+                conversation_id,
+                flow_id,
+                step_id,
+                db.db_ref(),
+            )
+            .await
+        }
+        #[cfg(not(feature = "sea-orm"))]
+        AsyncDatabase::_Impossible(_, _) => unreachable!(),
     }
-
-    Err(EngineError::Manager(ERROR_DB_SETUP.to_owned()))
 }
 
-pub async fn get_conversation(
-    db: &mut AsyncDatabase<'_>,
-    id: Uuid,
-) -> Result<data::models::Conversation, EngineError> {
-    csml_logger(
-        CsmlLog::new(None, None, None, format!("db call get client conversation")),
-        LogLvl::Info,
-    );
+pub async fn get_conversation<T: SeaOrmDbTraits>(
+    db: &mut AsyncDatabase<'_, T>,
+    conversation_id: Uuid,
+) -> Result<Conversation, EngineError> {
+    tracing::debug!(%conversation_id, "loading conversation");
+    let res = match db {
+        #[cfg(feature = "postgresql-async")]
+        AsyncDatabase::Postgresql(db) => {
+            postgresql_connector::conversations::get_conversation(db, conversation_id).await
+        }
+        #[cfg(feature = "sea-orm")]
+        AsyncDatabase::SeaOrm(db) => {
+            sea_orm_connector::conversations::get_conversation(db.db_ref(), conversation_id).await
+        }
+        #[cfg(not(feature = "sea-orm"))]
+        AsyncDatabase::_Impossible(_, _) => unreachable!(),
+    };
 
-    #[cfg(feature = "postgresql-async")]
-    if is_postgresql() {
-        let db = postgresql_connector::get_db(db)?;
-        return postgresql_connector::conversations::get_conversation(db, id).await;
+    if let Err(error) = &res {
+        tracing::error!(error = error as &dyn Error, %conversation_id, "error loading conversation");
     }
 
-    Err(EngineError::Manager(ERROR_DB_SETUP.to_owned()))
+    res
 }
 
-pub async fn get_client_conversations(
+pub async fn get_client_conversations<T: SeaOrmDbTraits>(
     client: &Client,
-    db: &mut AsyncDatabase<'_>,
+    db: &mut AsyncDatabase<'_, T>,
     limit: Option<u32>,
     pagination_key: Option<u32>,
-) -> Result<data::models::Paginated<data::models::Conversation>, EngineError> {
-    csml_logger(
-        CsmlLog::new(
-            None,
-            None,
-            None,
-            format!("db call get client conversations, limit: {:?}", limit),
-        ),
-        LogLvl::Info,
-    );
-    csml_logger(
-        CsmlLog::new(
-            Some(client),
-            None,
-            None,
-            format!(
-                "db call get client conversations limit: {:?}, pagination_key: {:?}",
-                limit, pagination_key
-            ),
-        ),
-        LogLvl::Info,
+) -> Result<data::models::Paginated<Conversation>, EngineError> {
+    tracing::debug!(
+        ?client,
+        ?limit,
+        ?pagination_key,
+        "getting client conversations"
     );
 
-    #[cfg(feature = "postgresql-async")]
-    if is_postgresql() {
-        let db = postgresql_connector::get_db(db)?;
-        return postgresql_connector::conversations::get_client_conversations(
-            client,
-            db,
-            limit,
-            pagination_key,
-        )
-        .await;
+    match db {
+        #[cfg(feature = "postgresql-async")]
+        AsyncDatabase::Postgresql(db) => {
+            postgresql_connector::conversations::get_client_conversations(
+                client,
+                db,
+                limit,
+                pagination_key,
+            )
+            .await
+        }
+        #[cfg(feature = "sea-orm")]
+        AsyncDatabase::SeaOrm(db) => {
+            sea_orm_connector::conversations::get_client_conversations(
+                db.db_ref(),
+                client,
+                limit,
+                pagination_key,
+            )
+            .await
+        }
+        #[cfg(not(feature = "sea-orm"))]
+        AsyncDatabase::_Impossible(_, _) => unreachable!(),
     }
-
-    Err(EngineError::Manager(ERROR_DB_SETUP.to_owned()))
 }

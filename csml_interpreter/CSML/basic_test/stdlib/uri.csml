@@ -1,0 +1,18 @@
+start:
+  goto end
+
+encode_uri:
+  do a = "file:///a?foo bar".encode_uri()
+  say a
+  do b = "file:///a?foo bar=x y".encode_uri()
+  say b
+  do c = "file:///a?foo bar=x y&v=%&i=  &j= , n".encode_uri()
+  say c
+
+decode_uri:
+  do a = "file:///a?foo%20bar".decode_uri()
+  say a
+  do b = "file:///a?foo%20bar=x%20y".decode_uri()
+  say b
+  do c = "file:///a?foo%20bar=x%20y&v=%&i=%20%20&j=%20,%20n".decode_uri()
+  say c

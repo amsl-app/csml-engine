@@ -22,6 +22,7 @@ pub struct Position {
 ////////////////////////////////////////////////////////////////////////////////
 
 impl Position {
+    #[must_use]
     pub fn new(interval: Interval, flow: &str) -> Self {
         Self {
             flow: flow.to_owned(),

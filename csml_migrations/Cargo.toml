@@ -1,0 +1,22 @@
+[package]
+name = "csml_migrations"
+version = "0.1.0"
+edition = "2024"
+publish = false
+authors = ["Sven Scheu <itssvens@gmail.com>"]
+
+[dependencies]
+chrono = "0.4.42"
+itertools = "0.14.0"
+tracing = "0.1.41"
+sea-orm-migration = { version = "1.1.16", features = ["runtime-tokio-rustls", "sqlx-postgres", "sqlx-sqlite"] }
+sea-orm = { version = "1.1.16" }
+sea-schema = { version = "0.16.2", default-features = false, features = ["sqlx-postgres", "sqlx-sqlite", "sqlx-mysql"] }
+sqlx = { version = "0.8.6", features = ["postgres", "sqlite"] }
+
+[dev-dependencies]
+tokio = { version = "1.47.1", features = ["macros"] }
+tracing-subscriber = { version = "0.3.20", features = ["env-filter", "registry", "std", "fmt"] }
+test-log = { version = "0.2.18", default-features = false, features = ["trace"] }
+test_helpers = { path = "../test_helpers" }
+serial_test = { version = "3.2.0" }

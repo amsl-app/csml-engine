@@ -1,0 +1,11 @@
+[package]
+name = "csml_model"
+version = "0.1.0"
+edition = "2024"
+authors = ["Sven Scheu <itssvens@gmail.com>"]
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+serde = "1.0.226"
+utoipa = { version = "5.4.0" }

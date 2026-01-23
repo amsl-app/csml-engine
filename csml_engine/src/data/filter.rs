@@ -23,7 +23,11 @@ mod tests {
 
     #[test]
     fn test_message_filter() {
-        let client = Client::new("Testing".to_string(), String::default(), String::default());
+        let client = Client {
+            bot_id: "Testing".to_string(),
+            channel_id: String::default(),
+            user_id: String::default(),
+        };
         let empty_filter = ClientMessageFilter::builder().client(&client);
         let empty_filter = empty_filter.build();
 
@@ -36,7 +40,7 @@ mod tests {
         } if bot_id == "Testing" ));
 
         let set_limit = ClientMessageFilter::builder().client(&client);
-        let set_limit = set_limit.limit(13371337);
+        let set_limit = set_limit.limit(13_371_337);
         let set_limit = set_limit.build();
 
         println!("Set Limit Filter: {set_limit:?}");
@@ -44,7 +48,7 @@ mod tests {
         assert!(matches!(
             set_limit,
             ClientMessageFilter {
-                limit: 13371337,
+                limit: 13_371_337,
                 ..
             }
         ));

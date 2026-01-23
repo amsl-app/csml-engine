@@ -1,15 +1,14 @@
 use crate::data::literal::ContentType;
 use crate::data::position::Position;
 use crate::data::{
-    ast::PathLiteral,
-    primitive::{PrimitiveNull, PrimitiveString},
-    warnings::DisplayWarnings,
-};
-use crate::data::{
+    Data, Literal, MSG, MemoryType, MessageData,
     ast::{Interval, PathState},
-    Data, Literal, MemoryType, MessageData, MSG,
 };
-use crate::error_format::*;
+use crate::data::{ast::PathLiteral, primitive::PrimitiveString, warnings::DisplayWarnings};
+use crate::error_format::{
+    ERROR_COMPONENT_NAMESPACE, ERROR_COMPONENT_UNKNOWN, ERROR_EVENT_CONTENT_TYPE, ErrorInfo,
+    gen_error_info,
+};
 use crate::interpreter::variable_handler::gen_generic_component::gen_generic_component;
 use crate::interpreter::{
     json_to_rust::json_to_literal,
@@ -23,53 +22,47 @@ use std::sync::mpsc;
 
 pub fn gen_literal_from_event(
     interval: Interval,
-    dis_warnings: &DisplayWarnings,
+    dis_warnings: DisplayWarnings,
     path: Option<&[(Interval, PathState)]>,
     data: &mut Data,
     msg_data: &mut MessageData,
-    sender: &Option<mpsc::Sender<MSG>>,
+    sender: Option<&mpsc::Sender<MSG>>,
 ) -> Result<Literal, ErrorInfo> {
-    match path {
-        Some(path) => {
-            let path = resolve_path(path, dis_warnings, data, msg_data, sender)?;
-            let mut lit =
-                json_to_literal(&data.event.content, interval.to_owned(), &data.context.flow)?;
+    let Some(path) = path else {
+        let mut lit = PrimitiveString::get_literal(&data.event.content_value, interval);
 
-            lit.set_content_type("event");
+        lit.secure_variable = data.event.secure;
 
-            let content_type = match ContentType::get(&lit) {
-                ContentType::Event(_) => ContentType::Event(data.event.content_type.to_owned()),
-                _ => {
-                    return Err(gen_error_info(
-                        Position::new(interval, &data.context.flow),
-                        ERROR_EVENT_CONTENT_TYPE.to_owned(),
-                    ))
-                }
-            };
+        return Ok(lit);
+    };
+    let path = resolve_path(path, dis_warnings, data, msg_data, sender)?;
+    let mut lit = json_to_literal(&data.event.content, interval, &data.context.flow)?;
 
-            let (lit, _tmp_mem_update) = exec_path_actions(
-                &mut lit,
-                dis_warnings,
-                &MemoryType::Event("event".to_owned()),
-                None,
-                &Some(path),
-                &content_type,
-                data,
-                msg_data,
-                sender,
-            )?;
+    lit.set_content_type("event");
 
-            Ok(lit)
+    let content_type = match ContentType::get(&lit) {
+        ContentType::Event(_) => ContentType::Event(data.event.content_type.clone()),
+        _ => {
+            return Err(gen_error_info(
+                Position::new(interval, &data.context.flow),
+                ERROR_EVENT_CONTENT_TYPE.to_owned(),
+            ));
         }
-        None => {
-            let mut lit =
-                PrimitiveString::get_literal(&data.event.content_value, interval.to_owned());
+    };
 
-            lit.secure_variable = data.event.secure;
+    let (lit, _tmp_mem_update) = exec_path_actions(
+        &mut lit,
+        dis_warnings,
+        &MemoryType::Event("event".to_owned()),
+        None,
+        Some(path),
+        &content_type,
+        data,
+        msg_data,
+        sender,
+    )?;
 
-            Ok(lit)
-        }
-    }
+    Ok(lit)
 }
 
 pub fn gen_literal_from_component(
@@ -77,92 +70,48 @@ pub fn gen_literal_from_component(
     path: Option<&[(Interval, PathState)]>,
     data: &mut Data,
     msg_data: &mut MessageData,
-    sender: &Option<mpsc::Sender<MSG>>,
+    sender: Option<&mpsc::Sender<MSG>>,
 ) -> Result<Literal, ErrorInfo> {
-    match path {
-        Some(path) => {
-            let mut path = resolve_path(path, &DisplayWarnings::On, data, msg_data, sender)?;
-
-            if let Some((_interval, function_name)) = path.first() {
-                if let PathLiteral::Func {
-                    name,
-                    interval,
-                    args,
-                } = function_name
-                {
-                    if let Some(component) = data.custom_component.get(name) {
-                        let mut lit = gen_generic_component(
-                            name,
-                            true,
-                            &data.context.flow,
-                            interval,
-                            args,
-                            component,
-                        )?;
-
-                        path.drain(..1);
-
-                        let (lit, _tmp_mem_update) = exec_path_actions(
-                            &mut lit,
-                            &DisplayWarnings::On,
-                            &MemoryType::Use,
-                            None,
-                            &Some(path),
-                            &ContentType::Primitive,
-                            data,
-                            msg_data,
-                            sender,
-                        )?;
-
-                        return Ok(lit);
-                    }
-                }
-            }
-
-            Err(gen_error_info(
-                Position::new(interval, &data.context.flow),
-                ERROR_COMPONENT_UNKNOWN.to_owned(),
-            ))
-        }
-        None => Err(gen_error_info(
+    let Some(path) = path else {
+        return Err(gen_error_info(
             Position::new(interval, &data.context.flow),
             ERROR_COMPONENT_NAMESPACE.to_owned(),
-        )),
-    }
-}
-
-pub fn get_literal_from_metadata(
-    path: &[(Interval, PathLiteral)],
-    dis_warnings: &DisplayWarnings,
-    data: &mut Data,
-    msg_data: &mut MessageData,
-    interval: Interval,
-    sender: &Option<mpsc::Sender<MSG>>,
-) -> Result<Literal, ErrorInfo> {
-    let mut lit = match path.get(0) {
-        Some((interval, PathLiteral::MapIndex(name))) => match data.context.metadata.get(name) {
-            Some(lit) => lit.to_owned(),
-            None => PrimitiveNull::get_literal(interval.to_owned()),
-        },
-        _ => {
-            return Err(gen_error_info(
-                Position::new(interval, &data.context.flow),
-                ERROR_FIND_BY_INDEX.to_owned(),
-            ));
-        }
+        ));
     };
+    let mut path = resolve_path(path, DisplayWarnings::On, data, msg_data, sender)?;
 
-    let content_type = ContentType::get(&lit);
-    let (lit, _tmp_mem_update) = exec_path_actions(
-        &mut lit,
-        dis_warnings,
-        &MemoryType::Metadata,
-        None,
-        &Some(path[1..].to_owned()),
-        &content_type,
-        data,
-        msg_data,
-        sender,
-    )?;
-    Ok(lit)
+    if let Some((
+        _interval,
+        PathLiteral::Func {
+            name,
+            interval,
+            args,
+        },
+    )) = path.first()
+        && let Some(component) = data.custom_component.get(name)
+    {
+        let mut lit =
+            gen_generic_component(name, true, &data.context.flow, interval, args, component)?;
+
+        path.drain(..1);
+
+        let (lit, _tmp_mem_update) = exec_path_actions(
+            &mut lit,
+            DisplayWarnings::On,
+            &MemoryType::Use,
+            None,
+            Some(path),
+            &ContentType::Primitive,
+            data,
+            msg_data,
+            sender,
+        )?;
+
+        return Ok(lit);
+    }
+
+    Err(gen_error_info(
+        Position::new(interval, &data.context.flow),
+        ERROR_COMPONENT_UNKNOWN.to_owned(),
+    ))
 }

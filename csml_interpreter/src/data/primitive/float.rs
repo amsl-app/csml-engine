@@ -1,5 +1,9 @@
+use crate::data::primitive::common;
+use crate::data::primitive::common::get_int_args;
 use crate::data::primitive::tools::check_division_by_zero_f64;
+use crate::data::primitive::utils::{impl_basic_cmp, impl_do_exec, impl_type_check, pow_f64};
 use crate::data::{
+    Data, Literal, MSG, MemoryType, MessageData,
     ast::Interval,
     error_info::ErrorInfo,
     literal,
@@ -10,22 +14,24 @@ use crate::data::{
         Primitive, PrimitiveBoolean, PrimitiveInt, PrimitiveObject, PrimitiveString, PrimitiveType,
         Right,
     },
-    Data, Literal, MemoryType, MessageData, MSG,
 };
-use crate::error_format::*;
+use crate::error_format::{
+    ERROR_FLOAT_UNKNOWN_METHOD, ERROR_ILLEGAL_OPERATION, OVERFLOWING_OPERATION, gen_error_info,
+};
+use num_traits::ToPrimitive;
 use phf::phf_map;
 use serde::{Deserialize, Serialize};
+use std::any::Any;
 use std::cmp::Ordering;
 use std::{collections::HashMap, sync::mpsc};
-
 ////////////////////////////////////////////////////////////////////////////////
 // DATA STRUCTURES
 ////////////////////////////////////////////////////////////////////////////////
 
 type PrimitiveMethod = fn(
-    float: &mut PrimitiveFloat,
-    args: &HashMap<String, Literal>,
-    additional_info: &Option<HashMap<String, Literal>>,
+    float: &PrimitiveFloat,
+    args: HashMap<String, Literal>,
+    additional_info: Option<&HashMap<String, Literal>>,
     data: &mut Data,
     interval: Interval,
 ) -> Result<Literal, ErrorInfo>;
@@ -35,7 +41,7 @@ const FUNCTIONS: phf::Map<&'static str, (PrimitiveMethod, Right)> = phf_map! {
     "is_int" => (PrimitiveFloat::is_int as PrimitiveMethod, Right::Read),
     "is_float" => (PrimitiveFloat::is_float as PrimitiveMethod, Right::Read),
     "type_of" => (PrimitiveFloat::type_of as PrimitiveMethod, Right::Read),
-    "is_error" => (PrimitiveFloat::is_error as PrimitiveMethod, Right::Read),
+    "is_error" => ((|_, _, additional_info, _, interval| common::is_error(additional_info, interval)) as PrimitiveMethod, Right::Read),
     "get_info" => (PrimitiveFloat::get_info as PrimitiveMethod, Right::Read),
     "to_string" => (PrimitiveFloat::to_string as PrimitiveMethod, Right::Read),
 
@@ -62,67 +68,15 @@ pub struct PrimitiveFloat {
 ////////////////////////////////////////////////////////////////////////////////
 
 impl PrimitiveFloat {
-    fn is_number(
-        _float: &mut PrimitiveFloat,
-        args: &HashMap<String, Literal>,
-        _additional_info: &Option<HashMap<String, Literal>>,
-        data: &mut Data,
-        interval: Interval,
-    ) -> Result<Literal, ErrorInfo> {
-        let usage = "is_number() => boolean";
+    impl_type_check!(is_number, true);
+    impl_type_check!(is_int, false);
+    impl_type_check!(is_float, true);
 
-        if !args.is_empty() {
-            return Err(gen_error_info(
-                Position::new(interval, &data.context.flow),
-                format!("usage: {}", usage),
-            ));
-        }
-
-        Ok(PrimitiveBoolean::get_literal(true, interval))
-    }
-
-    fn is_int(
-        _float: &mut PrimitiveFloat,
-        args: &HashMap<String, Literal>,
-        _additional_info: &Option<HashMap<String, Literal>>,
-        data: &mut Data,
-        interval: Interval,
-    ) -> Result<Literal, ErrorInfo> {
-        let usage = "is_int() => boolean";
-
-        if !args.is_empty() {
-            return Err(gen_error_info(
-                Position::new(interval, &data.context.flow),
-                format!("usage: {}", usage),
-            ));
-        }
-
-        Ok(PrimitiveBoolean::get_literal(false, interval))
-    }
-
-    fn is_float(
-        _float: &mut PrimitiveFloat,
-        args: &HashMap<String, Literal>,
-        _additional_info: &Option<HashMap<String, Literal>>,
-        data: &mut Data,
-        interval: Interval,
-    ) -> Result<Literal, ErrorInfo> {
-        let usage = "is_float() => boolean";
-
-        if !args.is_empty() {
-            return Err(gen_error_info(
-                Position::new(interval, &data.context.flow),
-                format!("usage: {}", usage),
-            ));
-        }
-
-        Ok(PrimitiveBoolean::get_literal(true, interval))
-    }
-
+    #[allow(clippy::needless_pass_by_value)]
     fn type_of(
-        _float: &mut PrimitiveFloat,
-        args: &HashMap<String, Literal>,
-        _additional_info: &Option<HashMap<String, Literal>>,
+        _self: &PrimitiveFloat,
+        args: HashMap<String, Literal>,
+        _additional_info: Option<&HashMap<String, Literal>>,
         data: &mut Data,
         interval: Interval,
     ) -> Result<Literal, ErrorInfo> {
@@ -131,42 +85,29 @@ impl PrimitiveFloat {
         if !args.is_empty() {
             return Err(gen_error_info(
                 Position::new(interval, &data.context.flow),
-                format!("usage: {}", usage),
+                format!("usage: {usage}"),
             ));
         }
 
         Ok(PrimitiveString::get_literal("float", interval))
     }
 
+    #[allow(clippy::needless_pass_by_value)]
     fn get_info(
-        _float: &mut PrimitiveFloat,
-        args: &HashMap<String, Literal>,
-        additional_info: &Option<HashMap<String, Literal>>,
+        _self: &PrimitiveFloat,
+        args: HashMap<String, Literal>,
+        additional_info: Option<&HashMap<String, Literal>>,
         data: &mut Data,
         interval: Interval,
     ) -> Result<Literal, ErrorInfo> {
-        literal::get_info(args, additional_info, interval, data)
+        literal::get_info(&args, additional_info, interval, data)
     }
 
-    fn is_error(
-        _float: &mut PrimitiveFloat,
-        _args: &HashMap<String, Literal>,
-        additional_info: &Option<HashMap<String, Literal>>,
-        _data: &mut Data,
-        interval: Interval,
-    ) -> Result<Literal, ErrorInfo> {
-        match additional_info {
-            Some(map) if map.contains_key("error") => {
-                Ok(PrimitiveBoolean::get_literal(true, interval))
-            }
-            _ => Ok(PrimitiveBoolean::get_literal(false, interval)),
-        }
-    }
-
+    #[allow(clippy::needless_pass_by_value)]
     fn to_string(
-        float: &mut PrimitiveFloat,
-        args: &HashMap<String, Literal>,
-        _additional_info: &Option<HashMap<String, Literal>>,
+        &self,
+        args: HashMap<String, Literal>,
+        _additional_info: Option<&HashMap<String, Literal>>,
         data: &mut Data,
         interval: Interval,
     ) -> Result<Literal, ErrorInfo> {
@@ -175,19 +116,23 @@ impl PrimitiveFloat {
         if !args.is_empty() {
             return Err(gen_error_info(
                 Position::new(interval, &data.context.flow),
-                format!("usage: {}", usage),
+                format!("usage: {usage}"),
             ));
         }
 
-        Ok(PrimitiveString::get_literal(&float.to_string(), interval))
+        Ok(PrimitiveString::get_literal(
+            &Primitive::to_string(self),
+            interval,
+        ))
     }
 }
 
 impl PrimitiveFloat {
+    #[allow(clippy::needless_pass_by_value)]
     fn abs(
-        float: &mut PrimitiveFloat,
-        args: &HashMap<String, Literal>,
-        _additional_info: &Option<HashMap<String, Literal>>,
+        &self,
+        args: HashMap<String, Literal>,
+        _additional_info: Option<&HashMap<String, Literal>>,
         data: &mut Data,
         interval: Interval,
     ) -> Result<Literal, ErrorInfo> {
@@ -196,19 +141,20 @@ impl PrimitiveFloat {
         if !args.is_empty() {
             return Err(gen_error_info(
                 Position::new(interval, &data.context.flow),
-                format!("usage: {}", usage),
+                format!("usage: {usage}"),
             ));
         }
 
-        let result = float.value.abs();
+        let result = self.value.abs();
 
-        Ok(PrimitiveFloat::get_literal(result, interval))
+        Ok(Self::get_literal(result, interval))
     }
 
+    #[allow(clippy::needless_pass_by_value)]
     fn cos(
-        float: &mut PrimitiveFloat,
-        args: &HashMap<String, Literal>,
-        _additional_info: &Option<HashMap<String, Literal>>,
+        &self,
+        args: HashMap<String, Literal>,
+        _additional_info: Option<&HashMap<String, Literal>>,
         data: &mut Data,
         interval: Interval,
     ) -> Result<Literal, ErrorInfo> {
@@ -217,19 +163,20 @@ impl PrimitiveFloat {
         if !args.is_empty() {
             return Err(gen_error_info(
                 Position::new(interval, &data.context.flow),
-                format!("usage: {}", usage),
+                format!("usage: {usage}"),
             ));
         }
 
-        let result = float.value.cos();
+        let result = self.value.cos();
 
-        Ok(PrimitiveFloat::get_literal(result, interval))
+        Ok(Self::get_literal(result, interval))
     }
 
+    #[allow(clippy::needless_pass_by_value)]
     fn ceil(
-        float: &mut PrimitiveFloat,
-        args: &HashMap<String, Literal>,
-        _additional_info: &Option<HashMap<String, Literal>>,
+        &self,
+        args: HashMap<String, Literal>,
+        _additional_info: Option<&HashMap<String, Literal>>,
         data: &mut Data,
         interval: Interval,
     ) -> Result<Literal, ErrorInfo> {
@@ -238,52 +185,40 @@ impl PrimitiveFloat {
         if !args.is_empty() {
             return Err(gen_error_info(
                 Position::new(interval, &data.context.flow),
-                format!("usage: {}", usage),
+                format!("usage: {usage}"),
             ));
         }
 
-        let result = float.value.ceil();
+        let result = self.value.ceil();
 
-        Ok(PrimitiveFloat::get_literal(result, interval))
+        Ok(Self::get_literal(result, interval))
     }
 
+    #[allow(clippy::needless_pass_by_value)]
     fn precision(
-        float: &mut PrimitiveFloat,
-        args: &HashMap<String, Literal>,
-        _additional_info: &Option<HashMap<String, Literal>>,
+        &self,
+        args: HashMap<String, Literal>,
+        _additional_info: Option<&HashMap<String, Literal>>,
         data: &mut Data,
         interval: Interval,
     ) -> Result<Literal, ErrorInfo> {
         let usage = "precision(value) => float";
 
-        let precision = match args.get("arg0") {
-            Some(int) if int.primitive.get_type() == PrimitiveType::PrimitiveInt => {
-                Literal::get_value::<i64>(
-                    &int.primitive,
-                    &data.context.flow,
-                    int.interval,
-                    format!("usage: {}", usage),
-                )?
-            }
-            _ => {
-                return Err(gen_error_info(
-                    Position::new(interval, &data.context.flow),
-                    format!("usage: {}", usage),
-                ))
-            }
-        };
+        let [precision]: [usize; 1] =
+            get_int_args(&args, data, interval, format!("usage {usage}"), usage)?;
 
-        let result = format!("{:.*}", *precision as usize, float.value)
+        let result = format!("{:.*}", precision, self.value)
             .parse::<f64>()
-            .unwrap_or(float.value);
+            .unwrap_or(self.value);
 
-        Ok(PrimitiveFloat::get_literal(result, interval))
+        Ok(Self::get_literal(result, interval))
     }
 
+    #[allow(clippy::needless_pass_by_value)]
     fn floor(
-        float: &mut PrimitiveFloat,
-        args: &HashMap<String, Literal>,
-        _additional_info: &Option<HashMap<String, Literal>>,
+        &self,
+        args: HashMap<String, Literal>,
+        _additional_info: Option<&HashMap<String, Literal>>,
         data: &mut Data,
         interval: Interval,
     ) -> Result<Literal, ErrorInfo> {
@@ -292,83 +227,32 @@ impl PrimitiveFloat {
         if !args.is_empty() {
             return Err(gen_error_info(
                 Position::new(interval, &data.context.flow),
-                format!("usage: {}", usage),
+                format!("usage: {usage}"),
             ));
         }
 
-        let result = float.value.floor();
+        let result = self.value.floor();
 
-        Ok(PrimitiveFloat::get_literal(result, interval))
+        Ok(Self::get_literal(result, interval))
     }
 
+    #[allow(clippy::needless_pass_by_value)]
     fn pow(
-        float: &mut PrimitiveFloat,
-        args: &HashMap<String, Literal>,
-        _additional_info: &Option<HashMap<String, Literal>>,
+        &self,
+        args: HashMap<String, Literal>,
+        _additional_info: Option<&HashMap<String, Literal>>,
         data: &mut Data,
         interval: Interval,
     ) -> Result<Literal, ErrorInfo> {
-        let usage = "pow(exponent: number) => float";
-
-        if args.len() != 1 {
-            return Err(gen_error_info(
-                Position::new(interval, &data.context.flow),
-                format!("usage: {}", usage),
-            ));
-        }
-
-        let exponent = match args.get("arg0") {
-            Some(exponent) if exponent.primitive.get_type() == PrimitiveType::PrimitiveInt => {
-                *Literal::get_value::<i64>(
-                    &exponent.primitive,
-                    &data.context.flow,
-                    interval,
-                    ERROR_NUMBER_POW.to_owned(),
-                )? as f64
-            }
-            Some(exponent) if exponent.primitive.get_type() == PrimitiveType::PrimitiveFloat => {
-                *Literal::get_value::<f64>(
-                    &exponent.primitive,
-                    &data.context.flow,
-                    interval,
-                    ERROR_NUMBER_POW.to_owned(),
-                )?
-            }
-            Some(exponent) if exponent.primitive.get_type() == PrimitiveType::PrimitiveString => {
-                let exponent = Literal::get_value::<String>(
-                    &exponent.primitive,
-                    &data.context.flow,
-                    interval,
-                    ERROR_NUMBER_POW.to_owned(),
-                )?;
-
-                match exponent.parse::<f64>() {
-                    Ok(res) => res,
-                    Err(_) => {
-                        return Err(gen_error_info(
-                            Position::new(interval, &data.context.flow),
-                            ERROR_NUMBER_POW.to_owned(),
-                        ));
-                    }
-                }
-            }
-            _ => {
-                return Err(gen_error_info(
-                    Position::new(interval, &data.context.flow),
-                    ERROR_NUMBER_POW.to_owned(),
-                ));
-            }
-        };
-
-        let result = float.value.powf(exponent);
-
-        Ok(PrimitiveFloat::get_literal(result, interval))
+        let result = pow_f64(self.value, &args, data, interval)?;
+        Ok(Self::get_literal(result, interval))
     }
 
+    #[allow(clippy::needless_pass_by_value)]
     fn round(
-        float: &mut PrimitiveFloat,
-        args: &HashMap<String, Literal>,
-        _additional_info: &Option<HashMap<String, Literal>>,
+        &self,
+        args: HashMap<String, Literal>,
+        _additional_info: Option<&HashMap<String, Literal>>,
         data: &mut Data,
         interval: Interval,
     ) -> Result<Literal, ErrorInfo> {
@@ -377,19 +261,20 @@ impl PrimitiveFloat {
         if !args.is_empty() {
             return Err(gen_error_info(
                 Position::new(interval, &data.context.flow),
-                format!("usage: {}", usage),
+                format!("usage: {usage}"),
             ));
         }
 
-        let result = float.value.round();
+        let result = self.value.round();
 
-        Ok(PrimitiveFloat::get_literal(result, interval))
+        Ok(Self::get_literal(result, interval))
     }
 
+    #[allow(clippy::needless_pass_by_value)]
     fn sin(
-        float: &mut PrimitiveFloat,
-        args: &HashMap<String, Literal>,
-        _additional_info: &Option<HashMap<String, Literal>>,
+        &self,
+        args: HashMap<String, Literal>,
+        _additional_info: Option<&HashMap<String, Literal>>,
         data: &mut Data,
         interval: Interval,
     ) -> Result<Literal, ErrorInfo> {
@@ -398,19 +283,20 @@ impl PrimitiveFloat {
         if !args.is_empty() {
             return Err(gen_error_info(
                 Position::new(interval, &data.context.flow),
-                format!("usage: {}", usage),
+                format!("usage: {usage}"),
             ));
         }
 
-        let result = float.value.sin();
+        let result = self.value.sin();
 
-        Ok(PrimitiveFloat::get_literal(result, interval))
+        Ok(Self::get_literal(result, interval))
     }
 
+    #[allow(clippy::needless_pass_by_value)]
     fn sqrt(
-        float: &mut PrimitiveFloat,
-        args: &HashMap<String, Literal>,
-        _additional_info: &Option<HashMap<String, Literal>>,
+        &self,
+        args: HashMap<String, Literal>,
+        _additional_info: Option<&HashMap<String, Literal>>,
         data: &mut Data,
         interval: Interval,
     ) -> Result<Literal, ErrorInfo> {
@@ -419,72 +305,71 @@ impl PrimitiveFloat {
         if !args.is_empty() {
             return Err(gen_error_info(
                 Position::new(interval, &data.context.flow),
-                format!("usage: {}", usage),
+                format!("usage: {usage}"),
             ));
         }
 
-        let result = float.value.sqrt();
+        let result = self.value.sqrt();
 
-        Ok(PrimitiveFloat::get_literal(result, interval))
+        Ok(Self::get_literal(result, interval))
     }
 
+    #[allow(clippy::needless_pass_by_value)]
     fn tan(
-        float: &mut PrimitiveFloat,
-        args: &HashMap<String, Literal>,
-        _additional_info: &Option<HashMap<String, Literal>>,
+        &self,
+        args: HashMap<String, Literal>,
+        _additional_info: Option<&HashMap<String, Literal>>,
         data: &mut Data,
         interval: Interval,
     ) -> Result<Literal, ErrorInfo> {
-        let usage = "tan() => float";
-
         if !args.is_empty() {
             return Err(gen_error_info(
                 Position::new(interval, &data.context.flow),
-                format!("usage: {}", usage),
+                "usage: tan() => float".to_string(),
             ));
         }
 
-        let result = float.value.tan();
+        let result = self.value.tan();
 
-        Ok(PrimitiveFloat::get_literal(result, interval))
+        Ok(Self::get_literal(result, interval))
     }
 
+    #[allow(clippy::needless_pass_by_value)]
     fn to_int(
-        float: &mut PrimitiveFloat,
-        args: &HashMap<String, Literal>,
-        _additional_info: &Option<HashMap<String, Literal>>,
+        &self,
+        args: HashMap<String, Literal>,
+        _additional_info: Option<&HashMap<String, Literal>>,
         data: &mut Data,
         interval: Interval,
     ) -> Result<Literal, ErrorInfo> {
-        let usage = "to_int() => int";
-
         if !args.is_empty() {
             return Err(gen_error_info(
                 Position::new(interval, &data.context.flow),
-                format!("usage: {}", usage),
+                "usage: to_int() => int".to_string(),
             ));
         }
 
-        Ok(PrimitiveInt::get_literal(float.value as i64, interval))
+        // Truncation is intentional
+        #[allow(clippy::cast_possible_truncation)]
+        Ok(PrimitiveInt::get_literal(self.value as i64, interval))
     }
 
+    #[allow(clippy::needless_pass_by_value)]
     fn to_float(
-        float: &mut PrimitiveFloat,
-        args: &HashMap<String, Literal>,
-        _additional_info: &Option<HashMap<String, Literal>>,
+        &self,
+        args: HashMap<String, Literal>,
+        _additional_info: Option<&HashMap<String, Literal>>,
         data: &mut Data,
         interval: Interval,
     ) -> Result<Literal, ErrorInfo> {
-        let usage = "to_float() => float";
-
         if !args.is_empty() {
             return Err(gen_error_info(
                 Position::new(interval, &data.context.flow),
-                format!("usage: {}", usage),
+                "usage: to_float() => float".to_string(),
             ));
         }
 
-        Ok(PrimitiveFloat::get_literal(float.value, interval))
+        Ok(Self::get_literal(self.value, interval))
     }
 }
 
@@ -493,12 +378,14 @@ impl PrimitiveFloat {
 ////////////////////////////////////////////////////////////////////////////////
 
 impl PrimitiveFloat {
+    #[must_use]
     pub fn new(value: f64) -> Self {
         Self { value }
     }
 
+    #[must_use]
     pub fn get_literal(float: f64, interval: Interval) -> Literal {
-        let primitive = Box::new(PrimitiveFloat::new(float));
+        let primitive = Box::new(Self::new(float));
 
         Literal {
             content_type: "float".to_owned(),
@@ -516,31 +403,19 @@ impl PrimitiveFloat {
 
 #[typetag::serde]
 impl Primitive for PrimitiveFloat {
-    fn is_eq(&self, other: &dyn Primitive) -> bool {
-        if let Some(other) = other.as_any().downcast_ref::<Self>() {
-            return self.value == other.value;
-        }
-
-        false
-    }
-
-    fn is_cmp(&self, other: &dyn Primitive) -> Option<Ordering> {
-        if let Some(other) = other.as_any().downcast_ref::<Self>() {
-            return self.value.partial_cmp(&other.value);
-        }
-
-        None
-    }
+    impl_basic_cmp!();
 
     fn do_add(&self, other: &dyn Primitive) -> Result<Box<dyn Primitive>, String> {
         let mut error_msg = ERROR_ILLEGAL_OPERATION;
 
         if let Some(other) = other.as_any().downcast_ref::<Self>() {
-            let lhs = self.value as i64;
-            let rhs = other.value as i64;
+            let lhs = self.value.ceil().to_i64();
+            let rhs = other.value.ceil().to_i64();
 
-            if lhs.checked_add(rhs).is_some() {
-                return Ok(Box::new(PrimitiveFloat::new(self.value + other.value)));
+            if let (Some(lhs), Some(rhs)) = (lhs, rhs)
+                && lhs.checked_add(rhs).is_some()
+            {
+                return Ok(Box::new(Self::new(self.value + other.value)));
             }
 
             error_msg = OVERFLOWING_OPERATION;
@@ -558,11 +433,13 @@ impl Primitive for PrimitiveFloat {
         let mut error_msg = ERROR_ILLEGAL_OPERATION;
 
         if let Some(other) = other.as_any().downcast_ref::<Self>() {
-            let lhs = self.value as i64;
-            let rhs = other.value as i64;
+            let lhs = self.value.ceil().to_i64();
+            let rhs = other.value.ceil().to_i64();
 
-            if lhs.checked_sub(rhs).is_some() {
-                return Ok(Box::new(PrimitiveFloat::new(self.value - other.value)));
+            if let (Some(lhs), Some(rhs)) = (lhs, rhs)
+                && lhs.checked_sub(rhs).is_some()
+            {
+                return Ok(Box::new(Self::new(self.value - other.value)));
             }
 
             error_msg = OVERFLOWING_OPERATION;
@@ -582,11 +459,15 @@ impl Primitive for PrimitiveFloat {
         if let Some(other) = other.as_any().downcast_ref::<Self>() {
             check_division_by_zero_f64(self.value, other.value)?;
 
-            let lhs = self.value as i64;
-            let rhs = other.value as i64;
+            // Pessimize (make a large as possible -> fail fast)
+            // the div result by maximizing the quotient and minimizing the divisor
+            let lhs = self.value.ceil().to_i64();
+            let rhs = other.value.floor().to_i64();
 
-            if lhs.checked_div(rhs).is_some() {
-                return Ok(Box::new(PrimitiveFloat::new(self.value / other.value)));
+            if let (Some(lhs), Some(rhs)) = (lhs, rhs)
+                && lhs.checked_div(rhs).is_some()
+            {
+                return Ok(Box::new(Self::new(self.value / other.value)));
             }
 
             error_msg = OVERFLOWING_OPERATION;
@@ -604,11 +485,13 @@ impl Primitive for PrimitiveFloat {
         let mut error_msg = ERROR_ILLEGAL_OPERATION;
 
         if let Some(other) = other.as_any().downcast_ref::<Self>() {
-            let lhs = self.value as i64;
-            let rhs = other.value as i64;
+            let lhs = self.value.ceil().to_i64();
+            let rhs = other.value.ceil().to_i64();
 
-            if lhs.checked_mul(rhs).is_some() {
-                return Ok(Box::new(PrimitiveFloat::new(self.value * other.value)));
+            if let (Some(lhs), Some(rhs)) = (lhs, rhs)
+                && lhs.checked_mul(rhs).is_some()
+            {
+                return Ok(Box::new(Self::new(self.value * other.value)));
             }
 
             error_msg = OVERFLOWING_OPERATION;
@@ -626,11 +509,15 @@ impl Primitive for PrimitiveFloat {
         let mut error_msg = ERROR_ILLEGAL_OPERATION;
 
         if let Some(other) = other.as_any().downcast_ref::<Self>() {
-            let lhs = self.value as i64;
-            let rhs = other.value as i64;
+            // Pessimize (make a large as possible -> fail fast)
+            // the div result by maximizing the quotient and minimizing the divisor
+            let lhs = self.value.ceil().to_i64();
+            let rhs = other.value.floor().to_i64();
 
-            if lhs.checked_rem(rhs).is_some() {
-                return Ok(Box::new(PrimitiveFloat::new(self.value % other.value)));
+            if let (Some(lhs), Some(rhs)) = (lhs, rhs)
+                && lhs.checked_rem(rhs).is_some()
+            {
+                return Ok(Box::new(Self::new(self.value % other.value)));
             }
 
             error_msg = OVERFLOWING_OPERATION;
@@ -648,8 +535,15 @@ impl Primitive for PrimitiveFloat {
         self
     }
 
-    fn as_any(&self) -> &dyn std::any::Any {
+    fn as_any(&self) -> &dyn Any {
         self
+    }
+    fn into_any(self: Box<Self>) -> Box<dyn Any> {
+        self
+    }
+
+    fn into_value(self: Box<Self>) -> Box<dyn Any> {
+        Box::new(self.value)
     }
 
     fn get_type(&self) -> PrimitiveType {
@@ -691,7 +585,7 @@ impl Primitive for PrimitiveFloat {
             "text".to_owned(),
             Literal {
                 content_type: "float".to_owned(),
-                primitive: Box::new(PrimitiveString::new(&self.to_string())),
+                primitive: Box::new(PrimitiveString::new(Primitive::to_string(self))),
                 additional_info: None,
                 secure_variable: false,
                 interval: Interval {
@@ -705,7 +599,7 @@ impl Primitive for PrimitiveFloat {
         );
 
         let mut result = PrimitiveObject::get_literal(
-            &hashmap,
+            hashmap,
             Interval {
                 start_column: 0,
                 start_line: 0,
@@ -722,34 +616,5 @@ impl Primitive for PrimitiveFloat {
         }
     }
 
-    fn do_exec(
-        &mut self,
-        name: &str,
-        args: &HashMap<String, Literal>,
-        mem_type: &MemoryType,
-        additional_info: &Option<HashMap<String, Literal>>,
-        interval: Interval,
-        _content_type: &ContentType,
-        data: &mut Data,
-        _msg_data: &mut MessageData,
-        _sender: &Option<mpsc::Sender<MSG>>,
-    ) -> Result<(Literal, Right), ErrorInfo> {
-        if let Some((f, right)) = FUNCTIONS.get(name) {
-            if *mem_type == MemoryType::Constant && *right == Right::Write {
-                return Err(gen_error_info(
-                    Position::new(interval, &data.context.flow),
-                    ERROR_CONSTANT_MUTABLE_FUNCTION.to_string(),
-                ));
-            } else {
-                let res = f(self, args, additional_info, data, interval)?;
-
-                return Ok((res, *right));
-            }
-        }
-
-        Err(gen_error_info(
-            Position::new(interval, &data.context.flow),
-            format!("[{}] {}", name, ERROR_FLOAT_UNKNOWN_METHOD),
-        ))
-    }
+    impl_do_exec!(FUNCTIONS, ERROR_FLOAT_UNKNOWN_METHOD);
 }

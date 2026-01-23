@@ -1,5 +1,5 @@
 table! {
-    cmsl_bot_versions (id) {
+    csml_bot_versions (id) {
         id -> Uuid,
         bot_id -> Varchar,
         bot -> Text,
@@ -75,7 +75,7 @@ table! {
 joinable!(csml_messages -> csml_conversations (conversation_id));
 
 allow_tables_to_appear_in_same_query!(
-    cmsl_bot_versions,
+    csml_bot_versions,
     csml_conversations,
     csml_memories,
     csml_messages,

@@ -1,18 +1,21 @@
-use crate::data::{ast::*, tokens::*};
+use crate::data::tokens::{LBracket, RBracket, Token};
+use crate::data::{
+    ast::{Expr, Function, Interval, PathState},
+    tokens::{DOT, Span},
+};
 use crate::parser::operator::parse_operator;
 use crate::parser::tools::get_string;
 use crate::parser::{
     parse_comments::comment, parse_var_types::parse_expr_list, tools::get_interval,
 };
 use nom::{
+    Err, IResult, Parser,
     branch::alt,
     bytes::complete::tag,
     error::{ContextError, ParseError},
     multi::many1,
     sequence::{preceded, terminated},
-    *,
 };
-
 ////////////////////////////////////////////////////////////////////////////////
 // PRIVATE FUNCTIONS
 ////////////////////////////////////////////////////////////////////////////////
@@ -27,9 +30,10 @@ where
     let (s, interval) = get_interval(s)?;
 
     let (s, path) = terminated(
-        preceded(tag(L_BRACKET), parse_operator),
-        preceded(comment, tag(R_BRACKET)),
-    )(s)?;
+        preceded(tag(LBracket::TOKEN), parse_operator),
+        preceded(comment, tag(RBracket::TOKEN)),
+    )
+    .parse(s)?;
 
     Ok((s, (interval, PathState::ExprIndex(path))))
 }
@@ -72,7 +76,7 @@ where
     E: ParseError<Span<'a>> + ContextError<Span<'a>>,
 {
     let path: IResult<Span<'a>, Vec<(Interval, PathState)>, E> =
-        many1(alt((parse_index, preceded(comment, parse_dot_path))))(s);
+        many1(alt((parse_index, preceded(comment, parse_dot_path)))).parse(s);
 
     match path {
         Ok((s, path)) => Ok((
@@ -82,7 +86,7 @@ where
                 path,
             },
         )),
-        Err(Err::Error(..)) | Err(Err::Failure(..)) => Ok((s, expr)),
+        Err(Err::Error(..) | Err::Failure(..)) => Ok((s, expr)),
         Err(Err::Incomplete(e)) => Err(Err::Incomplete(e)),
     }
 }

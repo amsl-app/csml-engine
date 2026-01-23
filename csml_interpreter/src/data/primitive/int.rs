@@ -4,25 +4,30 @@ use crate::data::primitive::boolean::PrimitiveBoolean;
 use crate::data::primitive::float::PrimitiveFloat;
 use crate::data::primitive::object::PrimitiveObject;
 use crate::data::primitive::string::PrimitiveString;
-use crate::data::primitive::tools::check_division_by_zero_i64;
-use crate::data::primitive::Right;
+use crate::data::primitive::tools::check_division_preconditions;
+use crate::data::primitive::utils::{
+    impl_basic_cmp, impl_do_exec, impl_type_check, pow_f64, require_n_args,
+};
 use crate::data::primitive::{Primitive, PrimitiveType};
-use crate::data::{ast::Interval, message::Message, Data, Literal, MemoryType, MessageData, MSG};
+use crate::data::primitive::{Right, common};
+use crate::data::{Data, Literal, MSG, MemoryType, MessageData, ast::Interval, message::Message};
 use crate::data::{literal, literal::ContentType};
-use crate::error_format::*;
+use crate::error_format::{
+    ERROR_ILLEGAL_OPERATION, ERROR_INT_UNKNOWN_METHOD, OVERFLOWING_OPERATION, gen_error_info,
+};
 use phf::phf_map;
 use serde::{Deserialize, Serialize};
+use std::any::Any;
 use std::cmp::Ordering;
 use std::{collections::HashMap, sync::mpsc};
-
 ////////////////////////////////////////////////////////////////////////////////
 // DATA STRUCTURES
 ////////////////////////////////////////////////////////////////////////////////
 
 type PrimitiveMethod = fn(
-    int: &mut PrimitiveInt,
-    args: &HashMap<String, Literal>,
-    additional_info: &Option<HashMap<String, Literal>>,
+    &PrimitiveInt,
+    args: HashMap<String, Literal>,
+    additional_info: Option<&HashMap<String, Literal>>,
     data: &mut Data,
     interval: Interval,
 ) -> Result<Literal, ErrorInfo>;
@@ -32,7 +37,7 @@ const FUNCTIONS: phf::Map<&'static str, (PrimitiveMethod, Right)> = phf_map! {
     "is_int" => (PrimitiveInt::is_int as PrimitiveMethod, Right::Read),
     "is_float" => (PrimitiveInt::is_float as PrimitiveMethod, Right::Read),
     "type_of" => (PrimitiveInt::type_of as PrimitiveMethod, Right::Read),
-    "is_error" => (PrimitiveInt::is_error as PrimitiveMethod, Right::Read),
+    "is_error" => ((|_, _, additional_info, _, interval| common::is_error(additional_info, interval)) as PrimitiveMethod, Right::Read),
     "get_info" => (PrimitiveInt::get_info as PrimitiveMethod, Right::Read),
     "to_string" => (PrimitiveInt::to_string as PrimitiveMethod, Right::Read),
 
@@ -59,443 +64,259 @@ pub struct PrimitiveInt {
 ////////////////////////////////////////////////////////////////////////////////
 
 impl PrimitiveInt {
-    fn is_number(
-        _int: &mut PrimitiveInt,
-        args: &HashMap<String, Literal>,
-        _additional_info: &Option<HashMap<String, Literal>>,
-        data: &mut Data,
-        interval: Interval,
-    ) -> Result<Literal, ErrorInfo> {
-        let usage = "is_number() => boolean";
+    impl_type_check!(is_number, true);
+    impl_type_check!(is_int, true);
+    impl_type_check!(is_float, false);
 
-        if !args.is_empty() {
-            return Err(gen_error_info(
-                Position::new(interval, &data.context.flow),
-                format!("usage: {}", usage),
-            ));
-        }
-
-        Ok(PrimitiveBoolean::get_literal(true, interval))
-    }
-
-    fn is_int(
-        _int: &mut PrimitiveInt,
-        args: &HashMap<String, Literal>,
-        _additional_info: &Option<HashMap<String, Literal>>,
-        data: &mut Data,
-        interval: Interval,
-    ) -> Result<Literal, ErrorInfo> {
-        let usage = "is_int() => boolean";
-
-        if !args.is_empty() {
-            return Err(gen_error_info(
-                Position::new(interval, &data.context.flow),
-                format!("usage: {}", usage),
-            ));
-        }
-
-        Ok(PrimitiveBoolean::get_literal(true, interval))
-    }
-
-    fn is_float(
-        _int: &mut PrimitiveInt,
-        args: &HashMap<String, Literal>,
-        _additional_info: &Option<HashMap<String, Literal>>,
-        data: &mut Data,
-        interval: Interval,
-    ) -> Result<Literal, ErrorInfo> {
-        let usage = "is_float() => boolean";
-
-        if !args.is_empty() {
-            return Err(gen_error_info(
-                Position::new(interval, &data.context.flow),
-                format!("usage: {}", usage),
-            ));
-        }
-
-        Ok(PrimitiveBoolean::get_literal(false, interval))
-    }
-
+    #[allow(clippy::needless_pass_by_value)]
     fn type_of(
-        _int: &mut PrimitiveInt,
-        args: &HashMap<String, Literal>,
-        _additional_info: &Option<HashMap<String, Literal>>,
+        _self: &Self,
+        args: HashMap<String, Literal>,
+        _additional_info: Option<&HashMap<String, Literal>>,
         data: &mut Data,
         interval: Interval,
     ) -> Result<Literal, ErrorInfo> {
-        let usage = "type_of() => string";
-
         if !args.is_empty() {
             return Err(gen_error_info(
                 Position::new(interval, &data.context.flow),
-                format!("usage: {}", usage),
+                "usage: type_of() => string".to_string(),
             ));
         }
 
         Ok(PrimitiveString::get_literal("int", interval))
     }
 
+    #[allow(clippy::needless_pass_by_value)]
     fn get_info(
-        _int: &mut PrimitiveInt,
-        args: &HashMap<String, Literal>,
-        additional_info: &Option<HashMap<String, Literal>>,
+        _self: &PrimitiveInt,
+        args: HashMap<String, Literal>,
+        additional_info: Option<&HashMap<String, Literal>>,
         data: &mut Data,
         interval: Interval,
     ) -> Result<Literal, ErrorInfo> {
-        literal::get_info(args, additional_info, interval, data)
+        literal::get_info(&args, additional_info, interval, data)
     }
 
-    fn is_error(
-        _int: &mut PrimitiveInt,
-        _args: &HashMap<String, Literal>,
-        additional_info: &Option<HashMap<String, Literal>>,
-        _data: &mut Data,
-        interval: Interval,
-    ) -> Result<Literal, ErrorInfo> {
-        match additional_info {
-            Some(map) if map.contains_key("error") => {
-                Ok(PrimitiveBoolean::get_literal(true, interval))
-            }
-            _ => Ok(PrimitiveBoolean::get_literal(false, interval)),
-        }
-    }
-
+    #[allow(clippy::needless_pass_by_value)]
     fn to_string(
-        int: &mut PrimitiveInt,
-        args: &HashMap<String, Literal>,
-        _additional_info: &Option<HashMap<String, Literal>>,
+        &self,
+        args: HashMap<String, Literal>,
+        _additional_info: Option<&HashMap<String, Literal>>,
         data: &mut Data,
         interval: Interval,
     ) -> Result<Literal, ErrorInfo> {
-        let usage = "to_string() => string";
-
         if !args.is_empty() {
             return Err(gen_error_info(
                 Position::new(interval, &data.context.flow),
-                format!("usage: {}", usage),
+                "usage: to_string() => string".to_string(),
             ));
         }
 
-        Ok(PrimitiveString::get_literal(&int.to_string(), interval))
+        Ok(PrimitiveString::get_literal(
+            &Primitive::to_string(self),
+            interval,
+        ))
     }
 }
 
 impl PrimitiveInt {
+    #[allow(clippy::needless_pass_by_value)]
     fn abs(
-        int: &mut PrimitiveInt,
-        args: &HashMap<String, Literal>,
-        _additional_info: &Option<HashMap<String, Literal>>,
+        &self,
+        args: HashMap<String, Literal>,
+        _additional_info: Option<&HashMap<String, Literal>>,
         data: &mut Data,
         interval: Interval,
     ) -> Result<Literal, ErrorInfo> {
-        let usage = "abs() => int";
+        require_n_args(0, &args, interval, data, "abs() => int")?;
 
-        if !args.is_empty() {
-            return Err(gen_error_info(
+        let result = self.value.checked_abs().ok_or_else(|| {
+            gen_error_info(
                 Position::new(interval, &data.context.flow),
-                format!("usage: {}", usage),
-            ));
-        }
+                OVERFLOWING_OPERATION.to_string(),
+            )
+        })?;
 
-        let float = int.value as f64;
-
-        let result = float.abs();
-        let result = result as i64;
-
-        Ok(PrimitiveInt::get_literal(result, interval))
+        Ok(Self::get_literal(result, interval))
     }
 
+    #[allow(clippy::needless_pass_by_value)]
     fn cos(
-        int: &mut PrimitiveInt,
-        args: &HashMap<String, Literal>,
-        _additional_info: &Option<HashMap<String, Literal>>,
+        &self,
+        args: HashMap<String, Literal>,
+        _additional_info: Option<&HashMap<String, Literal>>,
         data: &mut Data,
         interval: Interval,
     ) -> Result<Literal, ErrorInfo> {
-        let usage = "cos() => number";
-
         if !args.is_empty() {
             return Err(gen_error_info(
                 Position::new(interval, &data.context.flow),
-                format!("usage: {}", usage),
+                "usage: cos() => number".to_string(),
             ));
         }
 
-        let float = int.value as f64;
+        #[allow(clippy::cast_precision_loss)]
+        let float = self.value as f64;
 
         let result = float.cos();
 
-        match result == (result as i64) as f64 {
-            true => Ok(PrimitiveInt::get_literal(result as i64, interval)),
-            false => Ok(PrimitiveFloat::get_literal(result, interval)),
-        }
+        Ok(f64_to_literal(result, interval))
     }
 
+    #[allow(clippy::needless_pass_by_value)]
     fn ceil(
-        int: &mut PrimitiveInt,
-        args: &HashMap<String, Literal>,
-        _additional_info: &Option<HashMap<String, Literal>>,
+        &self,
+        args: HashMap<String, Literal>,
+        _additional_info: Option<&HashMap<String, Literal>>,
         data: &mut Data,
         interval: Interval,
     ) -> Result<Literal, ErrorInfo> {
-        let usage = "ceil() => int";
-
-        if !args.is_empty() {
-            return Err(gen_error_info(
-                Position::new(interval, &data.context.flow),
-                format!("usage: {}", usage),
-            ));
-        }
-
-        let float = int.value as f64;
-
-        let result = float.ceil();
-        let result = result as i64;
-
-        Ok(PrimitiveInt::get_literal(result, interval))
+        require_n_args(0, &args, interval, data, "ceil() => int")?;
+        Ok(Self::get_literal(self.value, interval))
     }
 
+    #[allow(clippy::unnecessary_wraps)]
     fn precision(
-        int: &mut PrimitiveInt,
-        _args: &HashMap<String, Literal>,
-        _additional_info: &Option<HashMap<String, Literal>>,
+        &self,
+        _args: HashMap<String, Literal>,
+        _additional_info: Option<&HashMap<String, Literal>>,
         _data: &mut Data,
         interval: Interval,
     ) -> Result<Literal, ErrorInfo> {
-        Ok(PrimitiveInt::get_literal(int.value, interval))
+        Ok(Self::get_literal(self.value, interval))
     }
 
+    #[allow(clippy::needless_pass_by_value)]
     fn floor(
-        int: &mut PrimitiveInt,
-        args: &HashMap<String, Literal>,
-        _additional_info: &Option<HashMap<String, Literal>>,
+        &self,
+        args: HashMap<String, Literal>,
+        _additional_info: Option<&HashMap<String, Literal>>,
         data: &mut Data,
         interval: Interval,
     ) -> Result<Literal, ErrorInfo> {
-        let usage = "floor() => int";
-
-        if !args.is_empty() {
-            return Err(gen_error_info(
-                Position::new(interval, &data.context.flow),
-                format!("usage: {}", usage),
-            ));
-        }
-
-        let float = int.value as f64;
-
-        let result = float.floor();
-        let result = result as i64;
-
-        Ok(PrimitiveInt::get_literal(result, interval))
+        require_n_args(0, &args, interval, data, "floor() => int")?;
+        Ok(Self::get_literal(self.value, interval))
     }
 
+    #[allow(clippy::needless_pass_by_value)]
     fn pow(
-        int: &mut PrimitiveInt,
-        args: &HashMap<String, Literal>,
-        _additional_info: &Option<HashMap<String, Literal>>,
+        &self,
+        args: HashMap<String, Literal>,
+        _additional_info: Option<&HashMap<String, Literal>>,
         data: &mut Data,
         interval: Interval,
     ) -> Result<Literal, ErrorInfo> {
-        let usage = "pow(exponent: number) => number";
-
-        if args.len() != 1 {
-            return Err(gen_error_info(
-                Position::new(interval, &data.context.flow),
-                format!("usage: {}", usage),
-            ));
-        }
-
-        let float = int.value as f64;
-
-        let exponent = match args.get("arg0") {
-            Some(exponent) if exponent.primitive.get_type() == PrimitiveType::PrimitiveInt => {
-                *Literal::get_value::<i64>(
-                    &exponent.primitive,
-                    &data.context.flow,
-                    interval,
-                    ERROR_NUMBER_POW.to_owned(),
-                )? as f64
-            }
-            Some(exponent) if exponent.primitive.get_type() == PrimitiveType::PrimitiveFloat => {
-                *Literal::get_value::<f64>(
-                    &exponent.primitive,
-                    &data.context.flow,
-                    interval,
-                    ERROR_NUMBER_POW.to_owned(),
-                )?
-            }
-            Some(exponent) if exponent.primitive.get_type() == PrimitiveType::PrimitiveString => {
-                let exponent = Literal::get_value::<String>(
-                    &exponent.primitive,
-                    &data.context.flow,
-                    interval,
-                    ERROR_NUMBER_POW.to_owned(),
-                )?;
-
-                match exponent.parse::<f64>() {
-                    Ok(res) => res,
-                    Err(_) => {
-                        return Err(gen_error_info(
-                            Position::new(interval, &data.context.flow),
-                            ERROR_NUMBER_POW.to_owned(),
-                        ));
-                    }
-                }
-            }
-            _ => {
-                return Err(gen_error_info(
-                    Position::new(interval, &data.context.flow),
-                    ERROR_NUMBER_POW.to_owned(),
-                ));
-            }
-        };
-
-        let result = float.powf(exponent);
-
-        match result == (result as i64) as f64 {
-            true => Ok(PrimitiveInt::get_literal(result as i64, interval)),
-            false => Ok(PrimitiveFloat::get_literal(result, interval)),
-        }
+        #[allow(clippy::cast_precision_loss)]
+        let result = pow_f64(self.value as f64, &args, data, interval)?;
+        Ok(f64_to_literal(result, interval))
     }
 
+    #[allow(clippy::needless_pass_by_value)]
     fn round(
-        int: &mut PrimitiveInt,
-        args: &HashMap<String, Literal>,
-        _additional_info: &Option<HashMap<String, Literal>>,
+        &self,
+        args: HashMap<String, Literal>,
+        _additional_info: Option<&HashMap<String, Literal>>,
         data: &mut Data,
         interval: Interval,
     ) -> Result<Literal, ErrorInfo> {
-        let usage = "round() => int";
-
-        if !args.is_empty() {
-            return Err(gen_error_info(
-                Position::new(interval, &data.context.flow),
-                format!("usage: {}", usage),
-            ));
-        }
-
-        let float = int.value as f64;
-
-        let result = float.round();
-        let result = result as i64;
-
-        Ok(PrimitiveInt::get_literal(result, interval))
+        require_n_args(0, &args, interval, data, "round() => int")?;
+        Ok(Self::get_literal(self.value, interval))
     }
 
+    #[allow(clippy::needless_pass_by_value)]
     fn sin(
-        int: &mut PrimitiveInt,
-        args: &HashMap<String, Literal>,
-        _additional_info: &Option<HashMap<String, Literal>>,
+        &self,
+        args: HashMap<String, Literal>,
+        _additional_info: Option<&HashMap<String, Literal>>,
         data: &mut Data,
         interval: Interval,
     ) -> Result<Literal, ErrorInfo> {
-        let usage = "sin() => number";
+        require_n_args(0, &args, interval, data, "sin() => number")?;
 
-        if !args.is_empty() {
-            return Err(gen_error_info(
-                Position::new(interval, &data.context.flow),
-                format!("usage: {}", usage),
-            ));
-        }
-
-        let float = int.value as f64;
+        #[allow(clippy::cast_precision_loss)]
+        let float = self.value as f64;
 
         let result = float.sin();
 
-        match result == (result as i64) as f64 {
-            true => Ok(PrimitiveInt::get_literal(result as i64, interval)),
-            false => Ok(PrimitiveFloat::get_literal(result, interval)),
-        }
+        Ok(f64_to_literal(result, interval))
     }
 
+    #[allow(clippy::needless_pass_by_value)]
     fn sqrt(
-        int: &mut PrimitiveInt,
-        args: &HashMap<String, Literal>,
-        _additional_info: &Option<HashMap<String, Literal>>,
+        &self,
+        args: HashMap<String, Literal>,
+        _additional_info: Option<&HashMap<String, Literal>>,
         data: &mut Data,
         interval: Interval,
     ) -> Result<Literal, ErrorInfo> {
-        let usage = "round() => number";
+        require_n_args(0, &args, interval, data, "sqrt() => number")?;
 
-        if !args.is_empty() {
-            return Err(gen_error_info(
-                Position::new(interval, &data.context.flow),
-                format!("usage: {}", usage),
-            ));
-        }
-
-        let float = int.value as f64;
+        #[allow(clippy::cast_precision_loss)]
+        let float = self.value as f64;
 
         let result = float.sqrt();
 
-        match result == (result as i64) as f64 {
-            true => Ok(PrimitiveInt::get_literal(result as i64, interval)),
-            false => Ok(PrimitiveFloat::get_literal(result, interval)),
-        }
+        Ok(f64_to_literal(result, interval))
     }
 
+    #[allow(clippy::needless_pass_by_value)]
     fn tan(
-        int: &mut PrimitiveInt,
-        args: &HashMap<String, Literal>,
-        _additional_info: &Option<HashMap<String, Literal>>,
+        &self,
+        args: HashMap<String, Literal>,
+        _additional_info: Option<&HashMap<String, Literal>>,
         data: &mut Data,
         interval: Interval,
     ) -> Result<Literal, ErrorInfo> {
-        let usage = "tan() => number";
+        require_n_args(0, &args, interval, data, "tan() => number")?;
 
-        if !args.is_empty() {
-            return Err(gen_error_info(
-                Position::new(interval, &data.context.flow),
-                format!("usage: {}", usage),
-            ));
-        }
-
-        let float = int.value as f64;
+        #[allow(clippy::cast_precision_loss)]
+        let float = self.value as f64;
 
         let result = float.tan();
 
-        match result == (result as i64) as f64 {
-            true => Ok(PrimitiveInt::get_literal(result as i64, interval)),
-            false => Ok(PrimitiveFloat::get_literal(result, interval)),
-        }
+        Ok(f64_to_literal(result, interval))
     }
 
+    #[allow(clippy::needless_pass_by_value)]
     fn to_int(
-        int: &mut PrimitiveInt,
-        args: &HashMap<String, Literal>,
-        _additional_info: &Option<HashMap<String, Literal>>,
+        &self,
+        args: HashMap<String, Literal>,
+        _additional_info: Option<&HashMap<String, Literal>>,
         data: &mut Data,
         interval: Interval,
     ) -> Result<Literal, ErrorInfo> {
-        let usage = "to_int() => int";
+        require_n_args(0, &args, interval, data, "to_int() => int")?;
 
-        if !args.is_empty() {
-            return Err(gen_error_info(
-                Position::new(interval, &data.context.flow),
-                format!("usage: {}", usage),
-            ));
-        }
-
-        Ok(PrimitiveInt::get_literal(int.value, interval))
+        Ok(Self::get_literal(self.value, interval))
     }
 
+    #[allow(clippy::needless_pass_by_value)]
     fn to_float(
-        int: &mut PrimitiveInt,
-        args: &HashMap<String, Literal>,
-        _additional_info: &Option<HashMap<String, Literal>>,
+        &self,
+        args: HashMap<String, Literal>,
+        _additional_info: Option<&HashMap<String, Literal>>,
         data: &mut Data,
         interval: Interval,
     ) -> Result<Literal, ErrorInfo> {
-        let usage = "to_float() => float";
+        require_n_args(0, &args, interval, data, "to_float() => float")?;
 
-        if !args.is_empty() {
-            return Err(gen_error_info(
-                Position::new(interval, &data.context.flow),
-                format!("usage: {}", usage),
-            ));
-        }
+        #[allow(clippy::cast_precision_loss)]
+        Ok(PrimitiveFloat::get_literal(self.value as f64, interval))
+    }
+}
 
-        Ok(PrimitiveFloat::get_literal(int.value as f64, interval))
+fn f64_to_literal(value: f64, interval: Interval) -> Literal {
+    // The comparison is fine because we just want to see if we can represent
+    // value as an exact i64
+    #[allow(
+        clippy::float_cmp,
+        clippy::cast_precision_loss,
+        clippy::cast_possible_truncation
+    )]
+    if value == (value as i64) as f64 {
+        PrimitiveInt::get_literal(value as i64, interval)
+    } else {
+        PrimitiveFloat::get_literal(value, interval)
     }
 }
 
@@ -504,12 +325,14 @@ impl PrimitiveInt {
 ////////////////////////////////////////////////////////////////////////////////
 
 impl PrimitiveInt {
+    #[must_use]
     pub fn new(value: i64) -> Self {
         Self { value }
     }
 
+    #[must_use]
     pub fn get_literal(int: i64, interval: Interval) -> Literal {
-        let primitive = Box::new(PrimitiveInt::new(int));
+        let primitive = Box::new(Self::new(int));
 
         Literal {
             content_type: "int".to_owned(),
@@ -519,6 +342,29 @@ impl PrimitiveInt {
             interval,
         }
     }
+
+    fn do_op(
+        &self,
+        other: &dyn Primitive,
+        op: fn(i64, i64) -> Option<i64>,
+        op_str: &str,
+    ) -> Result<Box<dyn Primitive>, String> {
+        let error = if let Some(other) = other.as_any().downcast_ref::<Self>() {
+            if let Some(value) = op(self.value, other.value) {
+                return Ok(Box::new(Self::new(value)));
+            }
+            OVERFLOWING_OPERATION
+        } else {
+            ERROR_ILLEGAL_OPERATION
+        };
+
+        Err(format!(
+            "{} {:?} {op_str} {:?}",
+            error,
+            self.get_type(),
+            other.get_type()
+        ))
+    }
 }
 
 ////////////////////////////////////////////////////////////////////////////////
@@ -527,125 +373,45 @@ impl PrimitiveInt {
 
 #[typetag::serde]
 impl Primitive for PrimitiveInt {
-    fn is_eq(&self, other: &dyn Primitive) -> bool {
-        if let Some(other) = other.as_any().downcast_ref::<Self>() {
-            return self.value == other.value;
-        }
-
-        false
-    }
-
-    fn is_cmp(&self, other: &dyn Primitive) -> Option<Ordering> {
-        if let Some(other) = other.as_any().downcast_ref::<Self>() {
-            return self.value.partial_cmp(&other.value);
-        }
-
-        None
-    }
+    impl_basic_cmp!();
 
     fn do_add(&self, other: &dyn Primitive) -> Result<Box<dyn Primitive>, String> {
-        let mut error_msg = ERROR_ILLEGAL_OPERATION;
-
-        if let Some(other) = other.as_any().downcast_ref::<Self>() {
-            if let Some(value) = self.value.checked_add(other.value) {
-                return Ok(Box::new(PrimitiveInt::new(value)));
-            }
-
-            error_msg = OVERFLOWING_OPERATION;
-        }
-
-        Err(format!(
-            "{} {:?} + {:?}",
-            error_msg,
-            self.get_type(),
-            other.get_type()
-        ))
+        self.do_op(other, i64::checked_add, "+")
     }
 
     fn do_sub(&self, other: &dyn Primitive) -> Result<Box<dyn Primitive>, String> {
-        let mut error_msg = ERROR_ILLEGAL_OPERATION;
-
-        if let Some(other) = other.as_any().downcast_ref::<Self>() {
-            if let Some(value) = self.value.checked_sub(other.value) {
-                return Ok(Box::new(PrimitiveInt::new(value)));
-            }
-
-            error_msg = OVERFLOWING_OPERATION
-        }
-
-        Err(format!(
-            "{} {:?} - {:?}",
-            error_msg,
-            self.get_type(),
-            other.get_type()
-        ))
+        self.do_op(other, i64::checked_sub, "-")
     }
 
     fn do_div(&self, other: &dyn Primitive) -> Result<Box<dyn Primitive>, String> {
-        let mut error_msg = ERROR_ILLEGAL_OPERATION;
-
         if let Some(other) = other.as_any().downcast_ref::<Self>() {
-            check_division_by_zero_i64(self.value, other.value)?;
+            check_division_preconditions(self.value, other.value)?;
 
-            if self.value % other.value != 0 {
-                if self.value.checked_div(other.value).is_some() {
-                    let value = self.value as f64 / other.value as f64;
+            let value: Box<dyn Primitive> = if self.value % other.value != 0 {
+                #[allow(clippy::cast_precision_loss)]
+                let value = self.value as f64 / other.value as f64;
 
-                    return Ok(Box::new(PrimitiveFloat::new(value)));
-                }
+                Box::new(PrimitiveFloat::new(value))
             } else {
-                if let Some(value) = self.value.checked_div(other.value) {
-                    return Ok(Box::new(PrimitiveInt::new(value)));
-                }
-
-                error_msg = OVERFLOWING_OPERATION;
-            }
+                Box::new(Self::new(self.value / other.value))
+            };
+            return Ok(value);
         }
 
         Err(format!(
             "{} {:?} / {:?}",
-            error_msg,
+            ERROR_ILLEGAL_OPERATION,
             self.get_type(),
             other.get_type()
         ))
     }
 
     fn do_mul(&self, other: &dyn Primitive) -> Result<Box<dyn Primitive>, String> {
-        let mut error_msg = ERROR_ILLEGAL_OPERATION;
-
-        if let Some(other) = other.as_any().downcast_ref::<Self>() {
-            if let Some(value) = self.value.checked_mul(other.value) {
-                return Ok(Box::new(PrimitiveInt::new(value)));
-            }
-
-            error_msg = OVERFLOWING_OPERATION;
-        }
-
-        Err(format!(
-            "{} {:?} * {:?}",
-            error_msg,
-            self.get_type(),
-            other.get_type()
-        ))
+        self.do_op(other, i64::checked_mul, "*")
     }
 
     fn do_rem(&self, other: &dyn Primitive) -> Result<Box<dyn Primitive>, String> {
-        let mut error_msg = ERROR_ILLEGAL_OPERATION;
-
-        if let Some(other) = other.as_any().downcast_ref::<Self>() {
-            if let Some(value) = self.value.checked_rem(other.value) {
-                return Ok(Box::new(PrimitiveInt::new(value)));
-            }
-
-            error_msg = OVERFLOWING_OPERATION;
-        }
-
-        Err(format!(
-            "{} {:?} % {:?}",
-            error_msg,
-            self.get_type(),
-            other.get_type()
-        ))
+        self.do_op(other, i64::checked_rem, "%")
     }
 
     fn as_debug(&self) -> &dyn std::fmt::Debug {
@@ -654,6 +420,13 @@ impl Primitive for PrimitiveInt {
 
     fn as_any(&self) -> &dyn std::any::Any {
         self
+    }
+    fn into_any(self: Box<Self>) -> Box<dyn Any> {
+        self
+    }
+
+    fn into_value(self: Box<Self>) -> Box<dyn Any> {
+        Box::new(self.value)
     }
 
     fn get_type(&self) -> PrimitiveType {
@@ -695,7 +468,7 @@ impl Primitive for PrimitiveInt {
             "text".to_owned(),
             Literal {
                 content_type: "int".to_owned(),
-                primitive: Box::new(PrimitiveString::new(&self.to_string())),
+                primitive: Box::new(PrimitiveString::new(Primitive::to_string(self))),
                 additional_info: None,
                 secure_variable: false,
                 interval: Interval {
@@ -709,7 +482,7 @@ impl Primitive for PrimitiveInt {
         );
 
         let mut result = PrimitiveObject::get_literal(
-            &hashmap,
+            hashmap,
             Interval {
                 start_column: 0,
                 start_line: 0,
@@ -726,34 +499,5 @@ impl Primitive for PrimitiveInt {
         }
     }
 
-    fn do_exec(
-        &mut self,
-        name: &str,
-        args: &HashMap<String, Literal>,
-        mem_type: &MemoryType,
-        additional_info: &Option<HashMap<String, Literal>>,
-        interval: Interval,
-        _content_type: &ContentType,
-        data: &mut Data,
-        _msg_data: &mut MessageData,
-        _sender: &Option<mpsc::Sender<MSG>>,
-    ) -> Result<(Literal, Right), ErrorInfo> {
-        if let Some((f, right)) = FUNCTIONS.get(name) {
-            if *mem_type == MemoryType::Constant && *right == Right::Write {
-                return Err(gen_error_info(
-                    Position::new(interval, &data.context.flow),
-                    ERROR_CONSTANT_MUTABLE_FUNCTION.to_string(),
-                ));
-            } else {
-                let res = f(self, args, additional_info, data, interval)?;
-
-                return Ok((res, *right));
-            }
-        }
-
-        Err(gen_error_info(
-            Position::new(interval, &data.context.flow),
-            format!("[{}] {}", name, ERROR_INT_UNKNOWN_METHOD),
-        ))
-    }
+    impl_do_exec!(FUNCTIONS, ERROR_INT_UNKNOWN_METHOD);
 }

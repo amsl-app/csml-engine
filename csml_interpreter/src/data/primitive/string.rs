@@ -6,35 +6,48 @@ use crate::data::primitive::float::PrimitiveFloat;
 use crate::data::primitive::int::PrimitiveInt;
 use crate::data::primitive::null::PrimitiveNull;
 use crate::data::primitive::object::PrimitiveObject;
-use crate::data::primitive::tools::*;
-use crate::data::primitive::Right;
+use crate::data::primitive::tools::{Integer, check_division_preconditions, get_integer};
 use crate::data::primitive::{Primitive, PrimitiveType};
-use crate::data::{ast::Interval, message::Message, Data, Literal, MemoryType, MessageData, MSG};
+use crate::data::primitive::{Right, common};
+use crate::data::{Data, Literal, MSG, MemoryType, MessageData, ast::Interval, message::Message};
 use crate::data::{literal, literal::ContentType};
-use crate::error_format::*;
+use crate::error_format::{
+    ERROR_CONSTANT_MUTABLE_FUNCTION, ERROR_ILLEGAL_OPERATION, ERROR_STRING_APPEND,
+    ERROR_STRING_CONTAINS_REGEX, ERROR_STRING_DO_MATCH, ERROR_STRING_END_WITH,
+    ERROR_STRING_END_WITH_REGEX, ERROR_STRING_FROM_JSON, ERROR_STRING_MATCH_REGEX,
+    ERROR_STRING_NUMERIC, ERROR_STRING_REPLACE, ERROR_STRING_REPLACE_ALL,
+    ERROR_STRING_REPLACE_REGEX, ERROR_STRING_RHS, ERROR_STRING_SPLIT, ERROR_STRING_START_WITH,
+    ERROR_STRING_START_WITH_REGEX, ERROR_STRING_UNKNOWN_METHOD, ERROR_STRING_VALID_REGEX,
+    OVERFLOWING_OPERATION, gen_error_info,
+};
 use crate::interpreter::json_to_literal;
 // use http::Uri;
+use crate::data::primitive::common::get_index_args;
+use crate::data::primitive::utils::require_n_args;
+use num_traits::ToPrimitive;
+use num_traits::ops::checked;
 use phf::phf_map;
 use regex::Regex;
 use serde::{Deserialize, Serialize};
+use std::any::Any;
+use std::borrow::Cow;
 use std::cmp::Ordering;
-use std::{collections::HashMap, sync::mpsc};
+use std::{collections::HashMap, ops, sync::mpsc};
+use url::Url;
 use url::form_urlencoded;
 use url::form_urlencoded::Parse;
-use url::Url;
-
 ////////////////////////////////////////////////////////////////////////////////
 // DATA STRUCTURES
 ////////////////////////////////////////////////////////////////////////////////
 
 type PrimitiveMethod = fn(
     string: &mut PrimitiveString,
-    args: &HashMap<String, Literal>,
-    additional_info: &Option<HashMap<String, Literal>>,
+    args: HashMap<String, Literal>,
+    additional_info: Option<&HashMap<String, Literal>>,
     interval: Interval,
     data: &mut Data,
     msg_data: &mut MessageData,
-    sender: &Option<mpsc::Sender<MSG>>,
+    sender: Option<&mpsc::Sender<MSG>>,
 ) -> Result<Literal, ErrorInfo>;
 
 const FUNCTIONS: phf::Map<&'static str, (PrimitiveMethod, Right)> = phf_map! {
@@ -43,9 +56,9 @@ const FUNCTIONS: phf::Map<&'static str, (PrimitiveMethod, Right)> = phf_map! {
     "is_float" => (PrimitiveString::is_float as PrimitiveMethod, Right::Read),
     "type_of" => (PrimitiveString::type_of as PrimitiveMethod, Right::Read),
     "get_info" => (PrimitiveString::get_info as PrimitiveMethod, Right::Read),
-    "is_error" => (PrimitiveString::is_error as PrimitiveMethod, Right::Read),
-    "to_string" => (PrimitiveString::to_string as PrimitiveMethod, Right::Read),
-    "to_json" => (PrimitiveString::to_csml_json as PrimitiveMethod, Right::Read),
+    "is_error" => ((|_, _, additional_info, interval, _, _, _| common::is_error(additional_info, interval)) as PrimitiveMethod, Right::Read),
+    "to_string" => (PrimitiveString::convert_to_string as PrimitiveMethod, Right::Read),
+    "to_json" => (PrimitiveString::convert_to_csml_json as PrimitiveMethod, Right::Read),
 
     "encode_uri" => (PrimitiveString::encode_uri as PrimitiveMethod, Right::Read),
     "decode_uri" => (PrimitiveString::decode_uri as PrimitiveMethod, Right::Read),
@@ -71,8 +84,8 @@ const FUNCTIONS: phf::Map<&'static str, (PrimitiveMethod, Right)> = phf_map! {
     "match_regex" => (PrimitiveString::do_match_regex as PrimitiveMethod, Right::Read),
     "starts_with" => (PrimitiveString::starts_with as PrimitiveMethod, Right::Read),
     "starts_with_regex" => (PrimitiveString::starts_with_regex as PrimitiveMethod, Right::Read),
-    "to_lowercase" => (PrimitiveString::to_lowercase as PrimitiveMethod, Right::Read),
-    "to_uppercase" => (PrimitiveString::to_uppercase as PrimitiveMethod, Right::Read),
+    "to_lowercase" => (PrimitiveString::convert_to_lowercase as PrimitiveMethod, Right::Read),
+    "to_uppercase" => (PrimitiveString::convert_to_uppercase as PrimitiveMethod, Right::Read),
     "capitalize" => (PrimitiveString::capitalize as PrimitiveMethod, Right::Read),
     "slice" => (PrimitiveString::slice as PrimitiveMethod, Right::Read),
     "split" => (PrimitiveString::split as PrimitiveMethod, Right::Read),
@@ -90,8 +103,8 @@ const FUNCTIONS: phf::Map<&'static str, (PrimitiveMethod, Right)> = phf_map! {
     "sin" => (PrimitiveString::sin as PrimitiveMethod, Right::Read),
     "sqrt" => (PrimitiveString::sqrt as PrimitiveMethod, Right::Read),
     "tan" => (PrimitiveString::tan as PrimitiveMethod, Right::Read),
-    "to_int" => (PrimitiveString::to_int as PrimitiveMethod, Right::Read),
-    "to_float" =>(PrimitiveString::to_float as PrimitiveMethod, Right::Read),
+    "to_int" => (PrimitiveString::convert_to_int as PrimitiveMethod, Right::Read),
+    "to_float" =>(PrimitiveString::convert_to_float as PrimitiveMethod, Right::Read),
 };
 
 #[derive(PartialEq, Debug, Clone, Serialize, Deserialize)]
@@ -103,75 +116,57 @@ pub struct PrimitiveString {
 // PRIVATE FUNCTIONS
 ////////////////////////////////////////////////////////////////////////////////
 
-fn encode_value(pairs: &Parse) -> String {
-    let mut vec = vec![];
+fn encode_key_value<'a, F>(acc: &mut String, encode: &F, key: &'a str, value: &'a str)
+where
+    for<'f> F: Fn(&'f str) -> Cow<'f, str>,
+{
+    acc.push_str(&encode(key));
 
-    for (index, (key, val)) in pairs.enumerate() {
-        let encoded_value: String = if val.contains(',') {
-            let split: Vec<&str> = val.split(',').collect();
+    if value.is_empty() {
+        return;
+    }
+    let mut split = value.split(',');
 
-            split
-                .into_iter()
-                .enumerate()
-                .fold(String::new(), |mut acc, (index, val)| {
-                    if index > 0 {
-                        acc.push(',');
-                    }
+    if let Some(first) = split.next() {
+        acc.push('=');
+        acc.push_str(&encode(first));
+        split.for_each(|value| {
+            acc.push(',');
+            acc.push_str(&encode(value));
+        });
+    }
+}
 
-                    let encoded = urlencoding::encode(val);
-                    acc.push_str(&encoded);
-
-                    acc
-                })
-        } else {
-            urlencoding::encode(&val).into_owned()
-        };
-
-        let and = if index == 0 { "" } else { "&" };
-        let equal = if encoded_value.is_empty() { "" } else { "=" };
-
-        vec.push(format!("{and}{}{equal}{}", key, encoded_value));
+fn encode_decode<'p, 'a: 'p, F>(pairs: &'p Parse<'a>, encode: F) -> String
+where
+    for<'f> F: Fn(&'f str) -> Cow<'f, str>,
+{
+    let mut output = String::new();
+    let mut iter = pairs.into_iter();
+    if let Some((key, value)) = iter.next() {
+        encode_key_value(&mut output, &encode, &key, &value);
+        iter.for_each(|(key, value)| {
+            output.push('&');
+            encode_key_value(&mut output, &encode, &key, &value);
+        });
     }
 
-    vec.concat()
+    output
+}
+
+fn encode_value(pairs: &Parse) -> String {
+    encode_decode(pairs, urlencoding::encode)
+}
+
+fn decode(value: &str) -> Cow<'_, str> {
+    match urlencoding::decode(value) {
+        Ok(decoded) => decoded,
+        Err(_) => Cow::Borrowed(value),
+    }
 }
 
 fn decode_value(pairs: &Parse) -> String {
-    let mut vec = vec![];
-
-    for (index, (key, val)) in pairs.enumerate() {
-        let encoded_value: String = if val.contains(',') {
-            let split: Vec<&str> = val.split(',').collect();
-
-            split
-                .into_iter()
-                .enumerate()
-                .fold(String::new(), |mut acc, (index, val)| {
-                    if index > 0 {
-                        acc.push(',');
-                    }
-
-                    match urlencoding::decode(val) {
-                        Ok(decoded) => acc.push_str(&decoded),
-                        Err(_) => acc.push_str(val),
-                    };
-
-                    acc
-                })
-        } else {
-            match urlencoding::decode(&val) {
-                Ok(decoded) => decoded.into_owned(),
-                Err(_) => val.into_owned(),
-            }
-        };
-
-        let and = if index == 0 { "" } else { "&" };
-        let equal = if encoded_value.is_empty() { "" } else { "=" };
-
-        vec.push(format!("{and}{}{equal}{}", key, encoded_value));
-    }
-
-    vec.concat()
+    encode_decode(pairs, decode)
 }
 
 ////////////////////////////////////////////////////////////////////////////////
@@ -179,97 +174,71 @@ fn decode_value(pairs: &Parse) -> String {
 ////////////////////////////////////////////////////////////////////////////////
 
 impl PrimitiveString {
+    #[allow(clippy::needless_pass_by_value)]
     fn is_number(
-        string: &mut PrimitiveString,
-        args: &HashMap<String, Literal>,
-        _additional_info: &Option<HashMap<String, Literal>>,
+        string: &mut Self,
+        args: HashMap<String, Literal>,
+        _additional_info: Option<&HashMap<String, Literal>>,
         interval: Interval,
         data: &mut Data,
         _msg_data: &mut MessageData,
-        _sender: &Option<mpsc::Sender<MSG>>,
+        _sender: Option<&mpsc::Sender<MSG>>,
     ) -> Result<Literal, ErrorInfo> {
-        let usage = "is_number() => boolean";
-
-        if !args.is_empty() {
-            return Err(gen_error_info(
-                Position::new(interval, &data.context.flow),
-                format!("usage: {}", usage),
-            ));
-        }
+        require_n_args(0, &args, interval, data, "is_number() => boolean")?;
 
         let result = string.value.parse::<f64>().is_ok();
 
         Ok(PrimitiveBoolean::get_literal(result, interval))
     }
 
+    #[allow(clippy::needless_pass_by_value)]
     fn is_int(
-        string: &mut PrimitiveString,
-        args: &HashMap<String, Literal>,
-        _additional_info: &Option<HashMap<String, Literal>>,
+        string: &mut Self,
+        args: HashMap<String, Literal>,
+        _additional_info: Option<&HashMap<String, Literal>>,
         interval: Interval,
         data: &mut Data,
         _msg_data: &mut MessageData,
-        _sender: &Option<mpsc::Sender<MSG>>,
+        _sender: Option<&mpsc::Sender<MSG>>,
     ) -> Result<Literal, ErrorInfo> {
-        let usage = "is_int() => boolean";
-
-        if !args.is_empty() {
-            return Err(gen_error_info(
-                Position::new(interval, &data.context.flow),
-                format!("usage: {}", usage),
-            ));
-        }
+        require_n_args(0, &args, interval, data, "is_int() => boolean")?;
 
         let result = string.value.parse::<i64>().is_ok();
 
         Ok(PrimitiveBoolean::get_literal(result, interval))
     }
 
+    #[allow(clippy::needless_pass_by_value)]
     fn is_float(
-        string: &mut PrimitiveString,
-        args: &HashMap<String, Literal>,
-        _additional_info: &Option<HashMap<String, Literal>>,
+        string: &mut Self,
+        args: HashMap<String, Literal>,
+        _additional_info: Option<&HashMap<String, Literal>>,
         interval: Interval,
         data: &mut Data,
         _msg_data: &mut MessageData,
-        _sender: &Option<mpsc::Sender<MSG>>,
+        _sender: Option<&mpsc::Sender<MSG>>,
     ) -> Result<Literal, ErrorInfo> {
-        let usage = "is_float() => boolean";
+        require_n_args(0, &args, interval, data, "is_float() => boolean")?;
 
-        if !args.is_empty() {
-            return Err(gen_error_info(
-                Position::new(interval, &data.context.flow),
-                format!("usage: {}", usage),
-            ));
-        }
+        let result = string
+            .value
+            .parse::<f64>()
+            .is_ok_and(|_| string.value.find('.').is_some());
 
-        let result = string.value.parse::<f64>();
-
-        match result {
-            Ok(_float) if string.value.find('.').is_some() => {
-                Ok(PrimitiveBoolean::get_literal(true, interval))
-            }
-            _ => Ok(PrimitiveBoolean::get_literal(false, interval)),
-        }
+        Ok(PrimitiveBoolean::get_literal(result, interval))
     }
 
+    #[allow(clippy::needless_pass_by_value)]
     fn is_email(
-        string: &mut PrimitiveString,
-        args: &HashMap<String, Literal>,
-        _additional_info: &Option<HashMap<String, Literal>>,
+        string: &mut Self,
+        args: HashMap<String, Literal>,
+        _additional_info: Option<&HashMap<String, Literal>>,
         interval: Interval,
         data: &mut Data,
         _msg_data: &mut MessageData,
-        _sender: &Option<mpsc::Sender<MSG>>,
+        _sender: Option<&mpsc::Sender<MSG>>,
     ) -> Result<Literal, ErrorInfo> {
-        let usage = "is_email() => boolean";
-
-        if !args.is_empty() {
-            return Err(gen_error_info(
-                Position::new(interval, &data.context.flow),
-                format!("usage: {}", usage),
-            ));
-        }
+        require_n_args(0, &args, interval, data, "is_email() => boolean")?;
 
         let email_regex = Regex::new(r"^[^@]+@[^@]+\.[^@]+$").unwrap();
 
@@ -278,108 +247,72 @@ impl PrimitiveString {
         Ok(PrimitiveBoolean::get_literal(result, interval))
     }
 
+    #[allow(clippy::needless_pass_by_value)]
     fn type_of(
-        _string: &mut PrimitiveString,
-        args: &HashMap<String, Literal>,
-        _additional_info: &Option<HashMap<String, Literal>>,
+        _string: &mut Self,
+        args: HashMap<String, Literal>,
+        _additional_info: Option<&HashMap<String, Literal>>,
         interval: Interval,
         data: &mut Data,
         _msg_data: &mut MessageData,
-        _sender: &Option<mpsc::Sender<MSG>>,
+        _sender: Option<&mpsc::Sender<MSG>>,
     ) -> Result<Literal, ErrorInfo> {
-        let usage = "type_of() => string";
+        require_n_args(0, &args, interval, data, "type_of() => string")?;
 
-        if !args.is_empty() {
-            return Err(gen_error_info(
-                Position::new(interval, &data.context.flow),
-                format!("usage: {}", usage),
-            ));
-        }
-
-        Ok(PrimitiveString::get_literal("string", interval))
+        Ok(Self::get_literal("string", interval))
     }
 
+    #[allow(clippy::needless_pass_by_value)]
     fn get_info(
-        _string: &mut PrimitiveString,
-        args: &HashMap<String, Literal>,
-        additional_info: &Option<HashMap<String, Literal>>,
+        _string: &mut Self,
+        args: HashMap<String, Literal>,
+        additional_info: Option<&HashMap<String, Literal>>,
         interval: Interval,
         data: &mut Data,
         _msg_data: &mut MessageData,
-        _sender: &Option<mpsc::Sender<MSG>>,
+        _sender: Option<&mpsc::Sender<MSG>>,
     ) -> Result<Literal, ErrorInfo> {
-        literal::get_info(args, additional_info, interval, data)
+        literal::get_info(&args, additional_info, interval, data)
     }
 
-    fn is_error(
-        _string: &mut PrimitiveString,
-        _args: &HashMap<String, Literal>,
-        additional_info: &Option<HashMap<String, Literal>>,
-        interval: Interval,
-        _data: &mut Data,
-        _msg_data: &mut MessageData,
-        _sender: &Option<mpsc::Sender<MSG>>,
-    ) -> Result<Literal, ErrorInfo> {
-        match additional_info {
-            Some(map) if map.contains_key("error") => {
-                Ok(PrimitiveBoolean::get_literal(true, interval))
-            }
-            _ => Ok(PrimitiveBoolean::get_literal(false, interval)),
-        }
-    }
-
-    fn to_string(
-        string: &mut PrimitiveString,
-        args: &HashMap<String, Literal>,
-        _additional_info: &Option<HashMap<String, Literal>>,
+    #[allow(clippy::needless_pass_by_value)]
+    fn convert_to_string(
+        string: &mut Self,
+        args: HashMap<String, Literal>,
+        _additional_info: Option<&HashMap<String, Literal>>,
         interval: Interval,
         data: &mut Data,
         _msg_data: &mut MessageData,
-        _sender: &Option<mpsc::Sender<MSG>>,
+        _sender: Option<&mpsc::Sender<MSG>>,
     ) -> Result<Literal, ErrorInfo> {
-        let usage = "to_string() => string";
+        require_n_args(0, &args, interval, data, "to_string() => string")?;
 
-        if !args.is_empty() {
-            return Err(gen_error_info(
-                Position::new(interval, &data.context.flow),
-                format!("usage: {}", usage),
-            ));
-        }
-
-        Ok(PrimitiveString::get_literal(&string.to_string(), interval))
+        Ok(Self::get_literal(&string.value, interval))
     }
 
-    fn to_csml_json(
-        string: &mut PrimitiveString,
-        args: &HashMap<String, Literal>,
-        _additional_info: &Option<HashMap<String, Literal>>,
+    #[allow(clippy::needless_pass_by_value)]
+    fn convert_to_csml_json(
+        string: &mut Self,
+        args: HashMap<String, Literal>,
+        _additional_info: Option<&HashMap<String, Literal>>,
         interval: Interval,
         data: &mut Data,
         _msg_data: &mut MessageData,
-        _sender: &Option<mpsc::Sender<MSG>>,
+        _sender: Option<&mpsc::Sender<MSG>>,
     ) -> Result<Literal, ErrorInfo> {
-        let usage = "to_json() => obj";
+        require_n_args(0, &args, interval, data, "to_json() => object")?;
 
-        if !args.is_empty() {
-            return Err(gen_error_info(
-                Position::new(interval, &data.context.flow),
-                format!("usage: {}", usage),
-            ));
-        }
-
-        let value = string.to_string();
-
-        let config = quickxml_to_serde::Config::new_with_custom_values(
+        let config = roxmltree_to_serde::Config::new_with_custom_values(
             true,
             "@",
             "$text",
-            quickxml_to_serde::NullValue::Ignore,
+            roxmltree_to_serde::NullValue::Ignore,
         );
 
         let xml: Option<serde_json::Value> =
-            quickxml_to_serde::xml_string_to_json(value.clone(), &config).ok();
+            roxmltree_to_serde::xml_str_to_json(&string.value, &config).ok();
 
-        let yaml: Option<serde_json::Value> = serde_yaml::from_str(&value).ok();
+        let yaml: Option<serde_json::Value> = serde_yml::from_str(&string.value).ok();
 
         match (&yaml, &xml) {
             (_, Some(json)) | (Some(json), _) => {
@@ -392,23 +325,17 @@ impl PrimitiveString {
         }
     }
 
+    #[allow(clippy::needless_pass_by_value)]
     fn encode_uri(
-        string: &mut PrimitiveString,
-        args: &HashMap<String, Literal>,
-        _additional_info: &Option<HashMap<String, Literal>>,
+        string: &mut Self,
+        args: HashMap<String, Literal>,
+        _additional_info: Option<&HashMap<String, Literal>>,
         interval: Interval,
         data: &mut Data,
         _msg_data: &mut MessageData,
-        _sender: &Option<mpsc::Sender<MSG>>,
+        _sender: Option<&mpsc::Sender<MSG>>,
     ) -> Result<Literal, ErrorInfo> {
-        let usage = "encode_uri() => String";
-
-        if !args.is_empty() {
-            return Err(gen_error_info(
-                Position::new(interval, &data.context.flow),
-                format!("usage: {}", usage),
-            ));
-        }
+        require_n_args(0, &args, interval, data, "encode_uri() => String")?;
 
         let vec: Vec<&str> = string.value.split('?').collect();
 
@@ -416,12 +343,11 @@ impl PrimitiveString {
             let url = Url::parse(&string.value).unwrap();
 
             let query_pairs = url.query_pairs();
-            let (q_separator, query) = match query_pairs.count() {
-                0 => ("", "".to_owned()),
-                _ => {
-                    let query = encode_value(&query_pairs);
-                    ("?", query)
-                }
+            let (q_separator, query) = if query_pairs.count() == 0 {
+                ("", String::new())
+            } else {
+                let query = encode_value(&query_pairs);
+                ("?", query)
             };
 
             let (f_serparatorm, fragment) = match url.fragment() {
@@ -431,50 +357,45 @@ impl PrimitiveString {
 
                     ("#", fragment)
                 }
-                None => ("", "".to_owned()),
+                None => ("", String::new()),
             };
 
             (q_separator, query, f_serparatorm, fragment)
         } else {
-            ("", "".to_owned(), "", "".to_owned())
+            ("", String::new(), "", String::new())
         };
 
-        Ok(PrimitiveString::get_literal(
+        Ok(Self::get_literal(
             &format!("{}{q_separator}{query}{separator}{fragment}", vec[0]),
             interval,
         ))
     }
 
+    #[allow(clippy::needless_pass_by_value)]
     fn decode_uri(
-        string: &mut PrimitiveString,
-        args: &HashMap<String, Literal>,
-        _additional_info: &Option<HashMap<String, Literal>>,
+        string: &mut Self,
+        args: HashMap<String, Literal>,
+        _additional_info: Option<&HashMap<String, Literal>>,
         interval: Interval,
         data: &mut Data,
         _msg_data: &mut MessageData,
-        _sender: &Option<mpsc::Sender<MSG>>,
+        _sender: Option<&mpsc::Sender<MSG>>,
     ) -> Result<Literal, ErrorInfo> {
-        let usage = "encode_uri() => String";
+        require_n_args(0, &args, interval, data, "decode_uri() => String")?;
 
-        if !args.is_empty() {
-            return Err(gen_error_info(
-                Position::new(interval, &data.context.flow),
-                format!("usage: {}", usage),
-            ));
-        }
+        let mut split = string.value.split('?');
+        // Split always has at least one element so unwrap is safe
+        let path = split.next().unwrap();
 
-        let vec: Vec<&str> = string.value.split('?').collect();
-
-        let (q_separator, query, separator, fragment) = if vec.len() > 1 {
+        let (q_separator, query, separator, fragment) = if split.next().is_some() {
             let url = Url::parse(&string.value).unwrap();
 
             let query_pairs = url.query_pairs();
-            let (q_separator, query) = match query_pairs.count() {
-                0 => ("", "".to_owned()),
-                _ => {
-                    let query = decode_value(&query_pairs);
-                    ("?", query)
-                }
+            let (q_separator, query) = if query_pairs.count() == 0 {
+                ("", String::new())
+            } else {
+                let query = decode_value(&query_pairs);
+                ("?", query)
             };
 
             let (f_serparatorm, fragment) = match url.fragment() {
@@ -484,63 +405,51 @@ impl PrimitiveString {
 
                     ("#", fragment)
                 }
-                None => ("", "".to_owned()),
+                None => ("", String::new()),
             };
 
             (q_separator, query, f_serparatorm, fragment)
         } else {
-            ("", "".to_owned(), "", "".to_owned())
+            ("", String::new(), "", String::new())
         };
 
-        Ok(PrimitiveString::get_literal(
-            &format!("{}{q_separator}{query}{separator}{fragment}", vec[0]),
+        Ok(Self::get_literal(
+            &format!("{path}{q_separator}{query}{separator}{fragment}"),
             interval,
         ))
     }
 
+    #[allow(clippy::needless_pass_by_value)]
     fn encode_uri_component(
-        string: &mut PrimitiveString,
-        args: &HashMap<String, Literal>,
-        _additional_info: &Option<HashMap<String, Literal>>,
+        string: &mut Self,
+        args: HashMap<String, Literal>,
+        _additional_info: Option<&HashMap<String, Literal>>,
         interval: Interval,
         data: &mut Data,
         _msg_data: &mut MessageData,
-        _sender: &Option<mpsc::Sender<MSG>>,
+        _sender: Option<&mpsc::Sender<MSG>>,
     ) -> Result<Literal, ErrorInfo> {
-        let usage = "encode_uri_component() => String";
+        require_n_args(0, &args, interval, data, "encode_uri_component() => String")?;
 
-        if !args.is_empty() {
-            return Err(gen_error_info(
-                Position::new(interval, &data.context.flow),
-                format!("usage: {}", usage),
-            ));
-        }
+        let encoded = urlencoding::encode(&string.value);
 
-        let encoded: String = urlencoding::encode(&string.value).into_owned();
-
-        Ok(PrimitiveString::get_literal(&encoded, interval))
+        Ok(Self::get_literal(&encoded, interval))
     }
 
+    #[allow(clippy::needless_pass_by_value)]
     fn decode_uri_component(
-        string: &mut PrimitiveString,
-        args: &HashMap<String, Literal>,
-        _additional_info: &Option<HashMap<String, Literal>>,
+        string: &mut Self,
+        args: HashMap<String, Literal>,
+        _additional_info: Option<&HashMap<String, Literal>>,
         interval: Interval,
         data: &mut Data,
         _msg_data: &mut MessageData,
-        _sender: &Option<mpsc::Sender<MSG>>,
+        _sender: Option<&mpsc::Sender<MSG>>,
     ) -> Result<Literal, ErrorInfo> {
-        let usage = "decode_uri_component() => String";
-
-        if !args.is_empty() {
-            return Err(gen_error_info(
-                Position::new(interval, &data.context.flow),
-                format!("usage: {}", usage),
-            ));
-        }
+        require_n_args(0, &args, interval, data, "decode_uri_component() => String")?;
 
         match urlencoding::decode(&string.value) {
-            Ok(decoded) => Ok(PrimitiveString::get_literal(&decoded, interval)),
+            Ok(decoded) => Ok(Self::get_literal(&decoded, interval)),
             Err(_) => Err(gen_error_info(
                 Position::new(interval, &data.context.flow),
                 "Invalid UTF8 string".to_string(),
@@ -548,179 +457,111 @@ impl PrimitiveString {
         }
     }
 
+    #[allow(clippy::needless_pass_by_value)]
     fn decode_html_entities(
-        string: &mut PrimitiveString,
-        args: &HashMap<String, Literal>,
-        _additional_info: &Option<HashMap<String, Literal>>,
+        string: &mut Self,
+        args: HashMap<String, Literal>,
+        _additional_info: Option<&HashMap<String, Literal>>,
         interval: Interval,
         data: &mut Data,
         _msg_data: &mut MessageData,
-        _sender: &Option<mpsc::Sender<MSG>>,
+        _sender: Option<&mpsc::Sender<MSG>>,
     ) -> Result<Literal, ErrorInfo> {
-        let usage = "decode_html_entities() => String";
-
-        if !args.is_empty() {
-            return Err(gen_error_info(
-                Position::new(interval, &data.context.flow),
-                format!("usage: {}", usage),
-            ));
-        }
+        require_n_args(0, &args, interval, data, "decode_html_entities() => String")?;
 
         let decoded = html_escape::decode_html_entities(&string.value);
 
-        Ok(PrimitiveString::get_literal(&decoded, interval))
+        Ok(Self::get_literal(&decoded, interval))
     }
 
+    #[allow(clippy::needless_pass_by_value)]
     fn encode_html_entities(
-        string: &mut PrimitiveString,
-        args: &HashMap<String, Literal>,
-        _additional_info: &Option<HashMap<String, Literal>>,
+        string: &mut Self,
+        args: HashMap<String, Literal>,
+        _additional_info: Option<&HashMap<String, Literal>>,
         interval: Interval,
         data: &mut Data,
         _msg_data: &mut MessageData,
-        _sender: &Option<mpsc::Sender<MSG>>,
+        _sender: Option<&mpsc::Sender<MSG>>,
     ) -> Result<Literal, ErrorInfo> {
-        let usage = "encode_html_entities() => String";
-
-        if !args.is_empty() {
-            return Err(gen_error_info(
-                Position::new(interval, &data.context.flow),
-                format!("usage: {}", usage),
-            ));
-        }
+        require_n_args(0, &args, interval, data, "encode_html_entities() => String")?;
 
         let decoded = html_escape::encode_text(&string.value);
 
-        Ok(PrimitiveString::get_literal(&decoded, interval))
+        Ok(Self::get_literal(&decoded, interval))
     }
 }
 
 impl PrimitiveString {
+    #[allow(clippy::needless_pass_by_value)]
     fn append(
-        string: &mut PrimitiveString,
-        args: &HashMap<String, Literal>,
-        _additional_info: &Option<HashMap<String, Literal>>,
+        string: &mut Self,
+        args: HashMap<String, Literal>,
+        _additional_info: Option<&HashMap<String, Literal>>,
         interval: Interval,
         data: &mut Data,
         _msg_data: &mut MessageData,
-        _sender: &Option<mpsc::Sender<MSG>>,
+        _sender: Option<&mpsc::Sender<MSG>>,
     ) -> Result<Literal, ErrorInfo> {
-        let usage = "append(value: string) => string";
+        let [value] = common::get_string_args(
+            &args,
+            data,
+            interval,
+            ERROR_STRING_APPEND,
+            "append(value: string) => string",
+        )?;
 
-        if args.len() != 1 {
-            return Err(gen_error_info(
-                Position::new(interval, &data.context.flow),
-                format!("usage: {}", usage),
-            ));
-        }
+        let result = format!("{}{}", string.value, value);
 
-        let mut result = string.value.to_owned();
-
-        let value = match args.get("arg0") {
-            Some(res) if res.primitive.get_type() == PrimitiveType::PrimitiveString => {
-                Literal::get_value::<String>(
-                    &res.primitive,
-                    &data.context.flow,
-                    interval,
-                    ERROR_STRING_APPEND.to_owned(),
-                )?
-            }
-            _ => {
-                return Err(gen_error_info(
-                    Position::new(interval, &data.context.flow),
-                    ERROR_STRING_APPEND.to_owned(),
-                ));
-            }
-        };
-
-        result.push_str(value);
-
-        Ok(PrimitiveString::get_literal(&result, interval))
+        Ok(Self::get_literal(&result, interval))
     }
 
+    #[allow(clippy::needless_pass_by_value)]
     fn contains(
-        string: &mut PrimitiveString,
-        args: &HashMap<String, Literal>,
-        _additional_info: &Option<HashMap<String, Literal>>,
+        string: &mut Self,
+        args: HashMap<String, Literal>,
+        _additional_info: Option<&HashMap<String, Literal>>,
         interval: Interval,
         data: &mut Data,
         _msg_data: &mut MessageData,
-        _sender: &Option<mpsc::Sender<MSG>>,
+        _sender: Option<&mpsc::Sender<MSG>>,
     ) -> Result<Literal, ErrorInfo> {
-        let usage = "contains(value: string) => boolean";
-
-        if args.len() != 1 {
-            return Err(gen_error_info(
-                Position::new(interval, &data.context.flow),
-                format!("usage: {}", usage),
-            ));
-        }
-
-        let value = match args.get("arg0") {
-            Some(res) if res.primitive.get_type() == PrimitiveType::PrimitiveString => {
-                Literal::get_value::<String>(
-                    &res.primitive,
-                    &data.context.flow,
-                    interval,
-                    ERROR_STRING_DO_MATCH.to_owned(),
-                )?
-            }
-            _ => {
-                return Err(gen_error_info(
-                    Position::new(interval, &data.context.flow),
-                    ERROR_STRING_DO_MATCH.to_owned(),
-                ));
-            }
-        };
+        let [value] = common::get_string_args(
+            &args,
+            data,
+            interval,
+            ERROR_STRING_DO_MATCH,
+            "contains(value: string) => boolean",
+        )?;
 
         let result = string.value.contains(value);
 
         Ok(PrimitiveBoolean::get_literal(result, interval))
     }
 
+    #[allow(clippy::needless_pass_by_value)]
     fn contains_regex(
-        string: &mut PrimitiveString,
-        args: &HashMap<String, Literal>,
-        _additional_info: &Option<HashMap<String, Literal>>,
+        string: &mut Self,
+        args: HashMap<String, Literal>,
+        _additional_info: Option<&HashMap<String, Literal>>,
         interval: Interval,
         data: &mut Data,
         _msg_data: &mut MessageData,
-        _sender: &Option<mpsc::Sender<MSG>>,
+        _sender: Option<&mpsc::Sender<MSG>>,
     ) -> Result<Literal, ErrorInfo> {
-        let usage = "contains_regex(value: string) => boolean";
+        let [value] = common::get_string_args(
+            &args,
+            data,
+            interval,
+            ERROR_STRING_CONTAINS_REGEX,
+            "contains_regex(value: string) => boolean",
+        )?;
 
-        if args.len() != 1 {
+        let Ok(action) = Regex::new(value) else {
             return Err(gen_error_info(
                 Position::new(interval, &data.context.flow),
-                format!("usage: {}", usage),
+                ERROR_STRING_CONTAINS_REGEX.to_owned(),
             ));
-        }
-
-        let value = match args.get("arg0") {
-            Some(res) if res.primitive.get_type() == PrimitiveType::PrimitiveString => {
-                Literal::get_value::<String>(
-                    &res.primitive,
-                    &data.context.flow,
-                    interval,
-                    ERROR_STRING_CONTAINS_REGEX.to_owned(),
-                )?
-            }
-            _ => {
-                return Err(gen_error_info(
-                    Position::new(interval, &data.context.flow),
-                    ERROR_STRING_CONTAINS_REGEX.to_owned(),
-                ));
-            }
-        };
-
-        let action = match Regex::new(value) {
-            Ok(res) => res,
-            Err(_) => {
-                return Err(gen_error_info(
-                    Position::new(interval, &data.context.flow),
-                    ERROR_STRING_CONTAINS_REGEX.to_owned(),
-                ));
-            }
         };
 
         let result = action.is_match(&string.value);
@@ -728,252 +569,128 @@ impl PrimitiveString {
         Ok(PrimitiveBoolean::get_literal(result, interval))
     }
 
+    #[allow(clippy::needless_pass_by_value)]
     fn replace(
-        string: &mut PrimitiveString,
-        args: &HashMap<String, Literal>,
-        _additional_info: &Option<HashMap<String, Literal>>,
+        string: &mut Self,
+        args: HashMap<String, Literal>,
+        _additional_info: Option<&HashMap<String, Literal>>,
         interval: Interval,
         data: &mut Data,
         _msg_data: &mut MessageData,
-        _sender: &Option<mpsc::Sender<MSG>>,
+        _sender: Option<&mpsc::Sender<MSG>>,
     ) -> Result<Literal, ErrorInfo> {
-        let usage = "replace(value_to_replace: string, replace_by: string) => string";
-
-        if args.len() != 2 {
-            return Err(gen_error_info(
-                Position::new(interval, &data.context.flow),
-                format!("usage: {}", usage),
-            ));
-        }
-
-        let (to_replace, replace_by) = match (args.get("arg0"), args.get("arg1")) {
-            (Some(old), Some(new))
-                if old.primitive.get_type() == PrimitiveType::PrimitiveString
-                    && new.primitive.get_type() == PrimitiveType::PrimitiveString =>
-            {
-                (
-                    Literal::get_value::<String>(
-                        &old.primitive,
-                        &data.context.flow,
-                        interval,
-                        ERROR_STRING_REPLACE.to_owned(),
-                    )?,
-                    Literal::get_value::<String>(
-                        &new.primitive,
-                        &data.context.flow,
-                        interval,
-                        ERROR_STRING_REPLACE.to_owned(),
-                    )?,
-                )
-            }
-            _ => {
-                return Err(gen_error_info(
-                    Position::new(interval, &data.context.flow),
-                    ERROR_STRING_REPLACE.to_owned(),
-                ));
-            }
-        };
+        let [to_replace, replace_by] = common::get_string_args(
+            &args,
+            data,
+            interval,
+            ERROR_STRING_REPLACE,
+            "replace(value_to_replace: string, replace_by: string) => string",
+        )?;
 
         let new_string = string.value.replacen(to_replace, replace_by, 1);
 
-        Ok(PrimitiveString::get_literal(&new_string, interval))
+        Ok(Self::get_literal(&new_string, interval))
     }
 
+    #[allow(clippy::needless_pass_by_value)]
     fn replace_all(
-        string: &mut PrimitiveString,
-        args: &HashMap<String, Literal>,
-        _additional_info: &Option<HashMap<String, Literal>>,
+        string: &mut Self,
+        args: HashMap<String, Literal>,
+        _additional_info: Option<&HashMap<String, Literal>>,
         interval: Interval,
         data: &mut Data,
         _msg_data: &mut MessageData,
-        _sender: &Option<mpsc::Sender<MSG>>,
+        _sender: Option<&mpsc::Sender<MSG>>,
     ) -> Result<Literal, ErrorInfo> {
-        let usage = "replace_all(value_to_replace: string, replace_by: string) => string";
-
-        if args.len() != 2 {
-            return Err(gen_error_info(
-                Position::new(interval, &data.context.flow),
-                format!("usage: {}", usage),
-            ));
-        }
-
-        let (to_replace, replace_by) = match (args.get("arg0"), args.get("arg1")) {
-            (Some(old), Some(new))
-                if old.primitive.get_type() == PrimitiveType::PrimitiveString
-                    && new.primitive.get_type() == PrimitiveType::PrimitiveString =>
-            {
-                (
-                    Literal::get_value::<String>(
-                        &old.primitive,
-                        &data.context.flow,
-                        interval,
-                        ERROR_STRING_REPLACE_ALL.to_owned(),
-                    )?,
-                    Literal::get_value::<String>(
-                        &new.primitive,
-                        &data.context.flow,
-                        interval,
-                        ERROR_STRING_REPLACE_ALL.to_owned(),
-                    )?,
-                )
-            }
-            _ => {
-                return Err(gen_error_info(
-                    Position::new(interval, &data.context.flow),
-                    ERROR_STRING_REPLACE_ALL.to_owned(),
-                ));
-            }
-        };
+        let [to_replace, replace_by] = common::get_string_args(
+            &args,
+            data,
+            interval,
+            ERROR_STRING_REPLACE_ALL,
+            "replace_all(value_to_replace: string, replace_by: string) => string",
+        )?;
 
         let new_string = string.value.replace(to_replace, replace_by);
 
-        Ok(PrimitiveString::get_literal(&new_string, interval))
+        Ok(Self::get_literal(&new_string, interval))
     }
 
+    #[allow(clippy::needless_pass_by_value)]
     fn replace_regex(
-        string: &mut PrimitiveString,
-        args: &HashMap<String, Literal>,
-        _additional_info: &Option<HashMap<String, Literal>>,
+        string: &mut Self,
+        args: HashMap<String, Literal>,
+        _additional_info: Option<&HashMap<String, Literal>>,
         interval: Interval,
         data: &mut Data,
         _msg_data: &mut MessageData,
-        _sender: &Option<mpsc::Sender<MSG>>,
+        _sender: Option<&mpsc::Sender<MSG>>,
     ) -> Result<Literal, ErrorInfo> {
-        let usage = "replace_regex(regex: string, replace_by: string) => string";
+        let [regex, replace_by] = common::get_string_args(
+            &args,
+            data,
+            interval,
+            ERROR_STRING_REPLACE_ALL,
+            "replace_regex(regex: string, replace_by: string) => string",
+        )?;
 
-        if args.len() != 2 {
+        let Ok(reg) = Regex::new(regex) else {
             return Err(gen_error_info(
                 Position::new(interval, &data.context.flow),
-                format!("usage: {}", usage),
+                ERROR_STRING_REPLACE_REGEX.to_owned(),
             ));
-        }
-
-        let (regex, replace_by) = match (args.get("arg0"), args.get("arg1")) {
-            (Some(old), Some(new))
-                if old.primitive.get_type() == PrimitiveType::PrimitiveString
-                    && new.primitive.get_type() == PrimitiveType::PrimitiveString =>
-            {
-                (
-                    Literal::get_value::<String>(
-                        &old.primitive,
-                        &data.context.flow,
-                        interval,
-                        ERROR_STRING_REPLACE_REGEX.to_owned(),
-                    )?,
-                    Literal::get_value::<String>(
-                        &new.primitive,
-                        &data.context.flow,
-                        interval,
-                        ERROR_STRING_REPLACE_REGEX.to_owned(),
-                    )?,
-                )
-            }
-            _ => {
-                return Err(gen_error_info(
-                    Position::new(interval, &data.context.flow),
-                    ERROR_STRING_REPLACE_REGEX.to_owned(),
-                ));
-            }
-        };
-
-        let reg = match Regex::new(regex) {
-            Ok(res) => res,
-            Err(_) => {
-                return Err(gen_error_info(
-                    Position::new(interval, &data.context.flow),
-                    ERROR_STRING_REPLACE_REGEX.to_owned(),
-                ));
-            }
         };
 
         let new_string = reg.replace_all(&string.value, replace_by);
 
-        Ok(PrimitiveString::get_literal(&new_string, interval))
+        Ok(Self::get_literal(&new_string, interval))
     }
 
+    #[allow(clippy::needless_pass_by_value)]
     fn ends_with(
-        string: &mut PrimitiveString,
-        args: &HashMap<String, Literal>,
-        _additional_info: &Option<HashMap<String, Literal>>,
+        string: &mut Self,
+        args: HashMap<String, Literal>,
+        _additional_info: Option<&HashMap<String, Literal>>,
         interval: Interval,
         data: &mut Data,
         _msg_data: &mut MessageData,
-        _sender: &Option<mpsc::Sender<MSG>>,
+        _sender: Option<&mpsc::Sender<MSG>>,
     ) -> Result<Literal, ErrorInfo> {
-        let usage = "ends_with(value: string) => boolean";
-
-        if args.len() != 1 {
-            return Err(gen_error_info(
-                Position::new(interval, &data.context.flow),
-                format!("usage: {}", usage),
-            ));
-        }
-
-        let value = match args.get("arg0") {
-            Some(res) if res.primitive.get_type() == PrimitiveType::PrimitiveString => {
-                Literal::get_value::<String>(
-                    &res.primitive,
-                    &data.context.flow,
-                    interval,
-                    ERROR_STRING_CONTAINS.to_owned(),
-                )?
-            }
-            _ => {
-                return Err(gen_error_info(
-                    Position::new(interval, &data.context.flow),
-                    ERROR_STRING_END_WITH.to_owned(),
-                ));
-            }
-        };
+        let [value] = common::get_string_args(
+            &args,
+            data,
+            interval,
+            ERROR_STRING_END_WITH,
+            "ends_with(value: string) => boolean",
+        )?;
 
         let result = string.value.ends_with(value);
 
         Ok(PrimitiveBoolean::get_literal(result, interval))
     }
 
+    #[allow(clippy::needless_pass_by_value)]
     fn ends_with_regex(
-        string: &mut PrimitiveString,
-        args: &HashMap<String, Literal>,
-        _additional_info: &Option<HashMap<String, Literal>>,
+        string: &mut Self,
+        args: HashMap<String, Literal>,
+        _additional_info: Option<&HashMap<String, Literal>>,
         interval: Interval,
         data: &mut Data,
         _msg_data: &mut MessageData,
-        _sender: &Option<mpsc::Sender<MSG>>,
+        _sender: Option<&mpsc::Sender<MSG>>,
     ) -> Result<Literal, ErrorInfo> {
-        let usage = "ends_with_regex(value: string) => boolean";
+        let [value] = common::get_string_args(
+            &args,
+            data,
+            interval,
+            ERROR_STRING_END_WITH_REGEX,
+            "ends_with_regex(value: string) => boolean",
+        )?;
 
-        if args.len() != 1 {
+        let Ok(action) = Regex::new(value) else {
             return Err(gen_error_info(
                 Position::new(interval, &data.context.flow),
-                format!("usage: {}", usage),
+                ERROR_STRING_END_WITH_REGEX.to_owned(),
             ));
-        }
-
-        let value = match args.get("arg0") {
-            Some(res) if res.primitive.get_type() == PrimitiveType::PrimitiveString => {
-                Literal::get_value::<String>(
-                    &res.primitive,
-                    &data.context.flow,
-                    interval,
-                    ERROR_STRING_END_WITH_REGEX.to_owned(),
-                )?
-            }
-            _ => {
-                return Err(gen_error_info(
-                    Position::new(interval, &data.context.flow),
-                    ERROR_STRING_END_WITH_REGEX.to_owned(),
-                ));
-            }
-        };
-
-        let action = match Regex::new(value) {
-            Ok(res) => res,
-            Err(_) => {
-                return Err(gen_error_info(
-                    Position::new(interval, &data.context.flow),
-                    ERROR_STRING_END_WITH_REGEX.to_owned(),
-                ));
-            }
         };
 
         for key in action.find_iter(&string.value) {
@@ -985,181 +702,131 @@ impl PrimitiveString {
         Ok(PrimitiveBoolean::get_literal(false, interval))
     }
 
+    #[allow(clippy::needless_pass_by_value)]
     fn from_json(
-        string: &mut PrimitiveString,
-        args: &HashMap<String, Literal>,
-        _additional_info: &Option<HashMap<String, Literal>>,
+        string: &mut Self,
+        args: HashMap<String, Literal>,
+        _additional_info: Option<&HashMap<String, Literal>>,
         interval: Interval,
         data: &mut Data,
         _msg_data: &mut MessageData,
-        _sender: &Option<mpsc::Sender<MSG>>,
+        _sender: Option<&mpsc::Sender<MSG>>,
     ) -> Result<Literal, ErrorInfo> {
-        let usage = "from_json() => object";
+        require_n_args(0, &args, interval, data, "from_json() => object")?;
 
-        if !args.is_empty() {
+        let Ok(object) = serde_json::from_str(&string.value) else {
             return Err(gen_error_info(
                 Position::new(interval, &data.context.flow),
-                format!("usage: {}", usage),
+                ERROR_STRING_FROM_JSON.to_owned(),
             ));
-        }
-
-        let object = match serde_json::from_str(&string.value) {
-            Ok(result) => result,
-            Err(_) => {
-                return Err(gen_error_info(
-                    Position::new(interval, &data.context.flow),
-                    ERROR_STRING_FROM_JSON.to_owned(),
-                ));
-            }
         };
 
         json_to_literal(&object, interval, &data.context.flow)
     }
 
+    #[allow(clippy::needless_pass_by_value)]
     fn is_empty(
-        string: &mut PrimitiveString,
-        args: &HashMap<String, Literal>,
-        _additional_info: &Option<HashMap<String, Literal>>,
+        string: &mut Self,
+        args: HashMap<String, Literal>,
+        _additional_info: Option<&HashMap<String, Literal>>,
         interval: Interval,
         data: &mut Data,
         _msg_data: &mut MessageData,
-        _sender: &Option<mpsc::Sender<MSG>>,
+        _sender: Option<&mpsc::Sender<MSG>>,
     ) -> Result<Literal, ErrorInfo> {
-        let usage = "is_empty() => boolean";
-
-        if args.len() != 1 {
-            return Err(gen_error_info(
-                Position::new(interval, &data.context.flow),
-                format!("usage: {}", usage),
-            ));
-        }
+        require_n_args(0, &args, interval, data, "is_empty() => boolean")?;
 
         let result = string.value.is_empty();
 
         Ok(PrimitiveBoolean::get_literal(result, interval))
     }
 
+    #[allow(clippy::needless_pass_by_value)]
     fn length(
-        string: &mut PrimitiveString,
-        args: &HashMap<String, Literal>,
-        _additional_info: &Option<HashMap<String, Literal>>,
+        string: &mut Self,
+        args: HashMap<String, Literal>,
+        _additional_info: Option<&HashMap<String, Literal>>,
         interval: Interval,
         data: &mut Data,
         _msg_data: &mut MessageData,
-        _sender: &Option<mpsc::Sender<MSG>>,
+        _sender: Option<&mpsc::Sender<MSG>>,
     ) -> Result<Literal, ErrorInfo> {
-        let usage = "length() => int";
-
-        if !args.is_empty() {
-            return Err(gen_error_info(
-                Position::new(interval, &data.context.flow),
-                format!("usage: {}", usage),
-            ));
-        }
+        require_n_args(0, &args, interval, data, "length() => int")?;
 
         let result = string.value.len();
 
-        Ok(PrimitiveInt::get_literal(result as i64, interval))
+        Ok(PrimitiveInt::get_literal(
+            result.to_i64().ok_or_else(|| {
+                gen_error_info(
+                    Position::new(interval, &data.context.flow),
+                    OVERFLOWING_OPERATION.to_owned(),
+                )
+            })?,
+            interval,
+        ))
     }
 
+    #[allow(clippy::needless_pass_by_value)]
     fn do_match(
-        string: &mut PrimitiveString,
-        args: &HashMap<String, Literal>,
-        _additional_info: &Option<HashMap<String, Literal>>,
+        string: &mut Self,
+        args: HashMap<String, Literal>,
+        _additional_info: Option<&HashMap<String, Literal>>,
         interval: Interval,
         data: &mut Data,
         _msg_data: &mut MessageData,
-        _sender: &Option<mpsc::Sender<MSG>>,
+        _sender: Option<&mpsc::Sender<MSG>>,
     ) -> Result<Literal, ErrorInfo> {
-        let usage = "match(value: string>) => array";
+        let [value] = common::get_string_args(
+            &args,
+            data,
+            interval,
+            ERROR_STRING_DO_MATCH,
+            "match(value: string) => array",
+        )?;
 
-        if args.len() != 1 {
-            return Err(gen_error_info(
-                Position::new(interval, &data.context.flow),
-                format!("usage: {}", usage),
-            ));
-        }
-
-        let mut vector: Vec<Literal> = Vec::new();
-
-        let value = match args.get("arg0") {
-            Some(res) if res.primitive.get_type() == PrimitiveType::PrimitiveString => {
-                Literal::get_value::<String>(
-                    &res.primitive,
-                    &data.context.flow,
-                    interval,
-                    ERROR_STRING_DO_MATCH.to_owned(),
-                )?
-            }
-            _ => {
-                return Err(gen_error_info(
-                    Position::new(interval, &data.context.flow),
-                    ERROR_STRING_DO_MATCH.to_owned(),
-                ));
-            }
-        };
-
-        for result in string.value.matches(value) {
-            vector.push(PrimitiveString::get_literal(result, interval));
-        }
+        let vector: Vec<Literal> = string
+            .value
+            .matches(value)
+            .map(|result| Self::get_literal(result, interval))
+            .collect();
 
         if vector.is_empty() {
             return Ok(PrimitiveNull::get_literal(interval));
         }
 
-        Ok(PrimitiveArray::get_literal(&vector, interval))
+        Ok(PrimitiveArray::get_literal(vector, interval))
     }
 
+    #[allow(clippy::needless_pass_by_value)]
     fn do_match_regex(
-        string: &mut PrimitiveString,
-        args: &HashMap<String, Literal>,
-        _additional_info: &Option<HashMap<String, Literal>>,
+        string: &mut Self,
+        args: HashMap<String, Literal>,
+        _additional_info: Option<&HashMap<String, Literal>>,
         interval: Interval,
         data: &mut Data,
         _msg_data: &mut MessageData,
-        _sender: &Option<mpsc::Sender<MSG>>,
+        _sender: Option<&mpsc::Sender<MSG>>,
     ) -> Result<Literal, ErrorInfo> {
-        let usage = "match_regex(value: string>) => array";
-
-        if args.len() != 1 {
-            return Err(gen_error_info(
-                Position::new(interval, &data.context.flow),
-                format!("usage: {}", usage),
-            ));
-        }
+        let [value] = common::get_string_args(
+            &args,
+            data,
+            interval,
+            ERROR_STRING_MATCH_REGEX,
+            "match_regex(value: string) => array",
+        )?;
 
         let mut s: &str = &string.value;
         let mut vector: Vec<Literal> = Vec::new();
 
-        let value = match args.get("arg0") {
-            Some(res) if res.primitive.get_type() == PrimitiveType::PrimitiveString => {
-                Literal::get_value::<String>(
-                    &res.primitive,
-                    &data.context.flow,
-                    interval,
-                    ERROR_STRING_MATCH_REGEX.to_owned(),
-                )?
-            }
-            _ => {
-                return Err(gen_error_info(
-                    Position::new(interval, &data.context.flow),
-                    ERROR_STRING_MATCH_REGEX.to_owned(),
-                ));
-            }
-        };
-
-        let action = match Regex::new(value) {
-            Ok(res) => res,
-            Err(_) => {
-                return Err(gen_error_info(
-                    Position::new(interval, &data.context.flow),
-                    ERROR_STRING_VALID_REGEX.to_owned(),
-                ));
-            }
+        let Ok(action) = Regex::new(value) else {
+            return Err(gen_error_info(
+                Position::new(interval, &data.context.flow),
+                ERROR_STRING_VALID_REGEX.to_owned(),
+            ));
         };
 
         while let Some(result) = action.find(s) {
-            vector.push(PrimitiveString::get_literal(
+            vector.push(Self::get_literal(
                 &s[result.start()..result.end()],
                 interval,
             ));
@@ -1170,164 +837,109 @@ impl PrimitiveString {
             return Ok(PrimitiveNull::get_literal(interval));
         }
 
-        Ok(PrimitiveArray::get_literal(&vector, interval))
+        Ok(PrimitiveArray::get_literal(vector, interval))
     }
 
+    #[allow(clippy::needless_pass_by_value)]
     fn starts_with(
-        string: &mut PrimitiveString,
-        args: &HashMap<String, Literal>,
-        _additional_info: &Option<HashMap<String, Literal>>,
+        string: &mut Self,
+        args: HashMap<String, Literal>,
+        _additional_info: Option<&HashMap<String, Literal>>,
         interval: Interval,
         data: &mut Data,
         _msg_data: &mut MessageData,
-        _sender: &Option<mpsc::Sender<MSG>>,
+        _sender: Option<&mpsc::Sender<MSG>>,
     ) -> Result<Literal, ErrorInfo> {
-        let usage = "starts_with(value: string) => boolean";
-
-        if args.len() != 1 {
-            return Err(gen_error_info(
-                Position::new(interval, &data.context.flow),
-                format!("usage: {}", usage),
-            ));
-        }
-
-        let value = match args.get("arg0") {
-            Some(res) if res.primitive.get_type() == PrimitiveType::PrimitiveString => {
-                Literal::get_value::<String>(
-                    &res.primitive,
-                    &data.context.flow,
-                    interval,
-                    ERROR_STRING_START_WITH.to_owned(),
-                )?
-            }
-            _ => {
-                return Err(gen_error_info(
-                    Position::new(interval, &data.context.flow),
-                    ERROR_STRING_START_WITH.to_owned(),
-                ));
-            }
-        };
+        let [value] = common::get_string_args(
+            &args,
+            data,
+            interval,
+            ERROR_STRING_START_WITH,
+            "starts_with(value: string) => boolean",
+        )?;
 
         let result = string.value.starts_with(value);
 
         Ok(PrimitiveBoolean::get_literal(result, interval))
     }
 
+    #[allow(clippy::needless_pass_by_value)]
     fn starts_with_regex(
-        string: &mut PrimitiveString,
-        args: &HashMap<String, Literal>,
-        _additional_info: &Option<HashMap<String, Literal>>,
+        string: &mut Self,
+        args: HashMap<String, Literal>,
+        _additional_info: Option<&HashMap<String, Literal>>,
         interval: Interval,
         data: &mut Data,
         _msg_data: &mut MessageData,
-        _sender: &Option<mpsc::Sender<MSG>>,
+        _sender: Option<&mpsc::Sender<MSG>>,
     ) -> Result<Literal, ErrorInfo> {
-        let usage = "starts_with_regex(value: string) => boolean";
+        let [value] = common::get_string_args(
+            &args,
+            data,
+            interval,
+            ERROR_STRING_START_WITH_REGEX,
+            "starts_with_regex(value: string) => boolean",
+        )?;
 
-        if args.len() != 1 {
+        let Ok(action) = Regex::new(value) else {
             return Err(gen_error_info(
                 Position::new(interval, &data.context.flow),
-                format!("usage: {}", usage),
+                ERROR_STRING_VALID_REGEX.to_owned(),
             ));
-        }
-
-        let value = match args.get("arg0") {
-            Some(res) if res.primitive.get_type() == PrimitiveType::PrimitiveString => {
-                Literal::get_value::<String>(
-                    &res.primitive,
-                    &data.context.flow,
-                    interval,
-                    ERROR_STRING_START_WITH_REGEX.to_owned(),
-                )?
-            }
-            _ => {
-                return Err(gen_error_info(
-                    Position::new(interval, &data.context.flow),
-                    ERROR_STRING_START_WITH_REGEX.to_owned(),
-                ));
-            }
         };
 
-        let action = match Regex::new(value) {
-            Ok(res) => res,
-            Err(_) => {
-                return Err(gen_error_info(
-                    Position::new(interval, &data.context.flow),
-                    ERROR_STRING_VALID_REGEX.to_owned(),
-                ));
-            }
-        };
-
-        if let Some(res) = action.find(&string.value) {
-            if res.start() == 0 {
-                return Ok(PrimitiveBoolean::get_literal(true, interval));
-            }
+        if let Some(res) = action.find(&string.value)
+            && res.start() == 0
+        {
+            return Ok(PrimitiveBoolean::get_literal(true, interval));
         }
 
         Ok(PrimitiveBoolean::get_literal(false, interval))
     }
 
-    fn to_lowercase(
-        string: &mut PrimitiveString,
-        args: &HashMap<String, Literal>,
-        _additional_info: &Option<HashMap<String, Literal>>,
+    #[allow(clippy::needless_pass_by_value)]
+    fn convert_to_lowercase(
+        string: &mut Self,
+        args: HashMap<String, Literal>,
+        _additional_info: Option<&HashMap<String, Literal>>,
         interval: Interval,
         data: &mut Data,
         _msg_data: &mut MessageData,
-        _sender: &Option<mpsc::Sender<MSG>>,
+        _sender: Option<&mpsc::Sender<MSG>>,
     ) -> Result<Literal, ErrorInfo> {
-        let usage = "to_lowercase() => string";
-
-        if !args.is_empty() {
-            return Err(gen_error_info(
-                Position::new(interval, &data.context.flow),
-                format!("usage: {}", usage),
-            ));
-        }
+        require_n_args(0, &args, interval, data, "to_lowercase() => string")?;
 
         let s = &string.value;
-        Ok(PrimitiveString::get_literal(&s.to_lowercase(), interval))
+        Ok(Self::get_literal(&s.to_lowercase(), interval))
     }
 
-    fn to_uppercase(
-        string: &mut PrimitiveString,
-        args: &HashMap<String, Literal>,
-        _additional_info: &Option<HashMap<String, Literal>>,
+    #[allow(clippy::needless_pass_by_value)]
+    fn convert_to_uppercase(
+        string: &mut Self,
+        args: HashMap<String, Literal>,
+        _additional_info: Option<&HashMap<String, Literal>>,
         interval: Interval,
         data: &mut Data,
         _msg_data: &mut MessageData,
-        _sender: &Option<mpsc::Sender<MSG>>,
+        _sender: Option<&mpsc::Sender<MSG>>,
     ) -> Result<Literal, ErrorInfo> {
-        let usage = "to_uppercase() => string";
-
-        if !args.is_empty() {
-            return Err(gen_error_info(
-                Position::new(interval, &data.context.flow),
-                format!("usage: {}", usage),
-            ));
-        }
+        require_n_args(0, &args, interval, data, "to_uppercase() => string")?;
 
         let s = &string.value;
-        Ok(PrimitiveString::get_literal(&s.to_uppercase(), interval))
+        Ok(Self::get_literal(&s.to_uppercase(), interval))
     }
 
+    #[allow(clippy::needless_pass_by_value)]
     fn capitalize(
-        string: &mut PrimitiveString,
-        args: &HashMap<String, Literal>,
-        _additional_info: &Option<HashMap<String, Literal>>,
+        string: &mut Self,
+        args: HashMap<String, Literal>,
+        _additional_info: Option<&HashMap<String, Literal>>,
         interval: Interval,
         data: &mut Data,
         _msg_data: &mut MessageData,
-        _sender: &Option<mpsc::Sender<MSG>>,
+        _sender: Option<&mpsc::Sender<MSG>>,
     ) -> Result<Literal, ErrorInfo> {
-        let usage = "capitalize() => string";
-
-        if !args.is_empty() {
-            return Err(gen_error_info(
-                Position::new(interval, &data.context.flow),
-                format!("usage: {}", usage),
-            ));
-        }
+        require_n_args(0, &args, interval, data, "capitalize() => string")?;
 
         let s = &string.value;
 
@@ -1337,240 +949,119 @@ impl PrimitiveString {
             Some(f) => f.to_uppercase().collect::<String>() + c.as_str(),
         };
 
-        Ok(PrimitiveString::get_literal(&string, interval))
+        Ok(Self::get_literal(&string, interval))
     }
 
+    #[allow(clippy::needless_pass_by_value)]
     fn slice(
-        string: &mut PrimitiveString,
-        args: &HashMap<String, Literal>,
-        _additional_info: &Option<HashMap<String, Literal>>,
+        string: &mut Self,
+        args: HashMap<String, Literal>,
+        _additional_info: Option<&HashMap<String, Literal>>,
         interval: Interval,
         data: &mut Data,
         _msg_data: &mut MessageData,
-        _sender: &Option<mpsc::Sender<MSG>>,
+        _sender: Option<&mpsc::Sender<MSG>>,
     ) -> Result<Literal, ErrorInfo> {
-        let usage = "slice(start: Integer, end: Optional<Integer>) => string";
         let text_vec = string.value.chars().collect::<Vec<_>>();
-        let len = text_vec.len();
 
-        match args.len() {
-            1 => match args.get("arg0") {
-                Some(literal) => {
-                    let mut int_start = Literal::get_value::<i64>(
-                        &literal.primitive,
-                        &data.context.flow,
-                        literal.interval,
-                        ERROR_SLICE_ARG_INT.to_owned(),
-                    )?
-                    .to_owned();
+        let (start_index, end_index) = get_index_args(
+            text_vec.len(),
+            &args,
+            interval,
+            data,
+            "usage: slice(start: Integer, end: Optional<Integer>) => string",
+        )?;
+        let value: String = text_vec[start_index..end_index].iter().collect();
 
-                    if int_start < 0 {
-                        int_start += len as i64;
-                    }
-
-                    let start = match int_start {
-                        value if value >= 0 && (value as usize) < len => value as usize,
-                        _ => {
-                            return Err(gen_error_info(
-                                Position::new(interval, &data.context.flow),
-                                ERROR_SLICE_ARG_LEN.to_owned(),
-                            ))
-                        }
-                    };
-
-                    let value = text_vec[start..].iter().cloned().collect::<String>();
-
-                    Ok(PrimitiveString::get_literal(&value, interval))
-                }
-                _ => Err(gen_error_info(
-                    Position::new(interval, &data.context.flow),
-                    ERROR_SLICE_ARG_INT.to_owned(),
-                )),
-            },
-            2 => match (args.get("arg0"), args.get("arg1")) {
-                (Some(literal_start), Some(literal_end)) => {
-                    let mut int_start = Literal::get_value::<i64>(
-                        &literal_start.primitive,
-                        &data.context.flow,
-                        literal_start.interval,
-                        ERROR_SLICE_ARG_INT.to_owned(),
-                    )?
-                    .to_owned();
-                    let mut int_end = Literal::get_value::<i64>(
-                        &literal_end.primitive,
-                        &data.context.flow,
-                        literal_end.interval,
-                        ERROR_SLICE_ARG_INT.to_owned(),
-                    )?
-                    .to_owned();
-
-                    if int_start < 0 {
-                        int_start += len as i64;
-                    }
-
-                    if int_end.is_negative() {
-                        int_end += len as i64;
-                    }
-                    if int_end < int_start {
-                        return Err(gen_error_info(
-                            Position::new(interval, &data.context.flow),
-                            ERROR_SLICE_ARG2.to_owned(),
-                        ));
-                    }
-
-                    let (start, end) = match (int_start, int_end) {
-                        (start, end)
-                            if int_start >= 0
-                                && end >= 0
-                                && (start as usize) < len
-                                && (end as usize) <= len =>
-                        {
-                            (start as usize, end as usize)
-                        }
-                        _ => {
-                            return Err(gen_error_info(
-                                Position::new(interval, &data.context.flow),
-                                ERROR_SLICE_ARG_LEN.to_owned(),
-                            ))
-                        }
-                    };
-                    let value = text_vec[start..end].iter().cloned().collect::<String>();
-
-                    Ok(PrimitiveString::get_literal(&value, interval))
-                }
-                _ => Err(gen_error_info(
-                    Position::new(interval, &data.context.flow),
-                    ERROR_SLICE_ARG_INT.to_owned(),
-                )),
-            },
-            _ => Err(gen_error_info(
-                Position::new(interval, &data.context.flow),
-                format!("usage: {}", usage),
-            )),
-        }
+        Ok(Self::get_literal(&value, interval))
     }
 
+    #[allow(clippy::needless_pass_by_value)]
     fn split(
-        string: &mut PrimitiveString,
-        args: &HashMap<String, Literal>,
-        _additional_info: &Option<HashMap<String, Literal>>,
+        string: &mut Self,
+        args: HashMap<String, Literal>,
+        _additional_info: Option<&HashMap<String, Literal>>,
         interval: Interval,
         data: &mut Data,
         _msg_data: &mut MessageData,
-        _sender: &Option<mpsc::Sender<MSG>>,
+        _sender: Option<&mpsc::Sender<MSG>>,
     ) -> Result<Literal, ErrorInfo> {
-        let usage = "string(separator: string) => array";
+        let [separator] = common::get_string_args(
+            &args,
+            data,
+            interval,
+            ERROR_STRING_SPLIT,
+            "split(separator: string) => array",
+        )?;
 
-        if args.len() != 1 {
-            return Err(gen_error_info(
-                Position::new(interval, &data.context.flow),
-                format!("usage: {}", usage),
-            ));
-        }
+        let vector: Vec<Literal> = string
+            .value
+            .split(separator)
+            .map(|part| Self::get_literal(part, interval))
+            .collect();
 
-        let separator = match args.get("arg0") {
-            Some(res) if res.primitive.get_type() == PrimitiveType::PrimitiveString => {
-                Literal::get_value::<String>(
-                    &res.primitive,
-                    &data.context.flow,
-                    interval,
-                    ERROR_STRING_SPLIT.to_owned(),
-                )?
-            }
-            _ => {
-                return Err(gen_error_info(
-                    Position::new(interval, &data.context.flow),
-                    ERROR_ARRAY_JOIN.to_owned(),
-                ));
-            }
-        };
-
-        let mut vector: Vec<Literal> = Vec::new();
-
-        for result in string.value.split(separator) {
-            vector.push(PrimitiveString::get_literal(result, interval));
-        }
-
-        Ok(PrimitiveArray::get_literal(&vector, interval))
+        Ok(PrimitiveArray::get_literal(vector, interval))
     }
 
+    #[allow(clippy::needless_pass_by_value)]
     fn trim(
-        string: &mut PrimitiveString,
-        args: &HashMap<String, Literal>,
-        _additional_info: &Option<HashMap<String, Literal>>,
+        string: &mut Self,
+        args: HashMap<String, Literal>,
+        _additional_info: Option<&HashMap<String, Literal>>,
         interval: Interval,
         data: &mut Data,
         _msg_data: &mut MessageData,
-        _sender: &Option<mpsc::Sender<MSG>>,
+        _sender: Option<&mpsc::Sender<MSG>>,
     ) -> Result<Literal, ErrorInfo> {
-        let usage = "trim() => string";
-
-        if !args.is_empty() {
-            return Err(gen_error_info(
-                Position::new(interval, &data.context.flow),
-                format!("usage: {}", usage),
-            ));
-        }
+        require_n_args(0, &args, interval, data, "trim() => string")?;
 
         let s = &string.value;
-        Ok(PrimitiveString::get_literal(s.trim(), interval))
+        Ok(Self::get_literal(s.trim(), interval))
     }
 
+    #[allow(clippy::needless_pass_by_value)]
     fn trim_left(
-        string: &mut PrimitiveString,
-        args: &HashMap<String, Literal>,
-        _additional_info: &Option<HashMap<String, Literal>>,
+        string: &mut Self,
+        args: HashMap<String, Literal>,
+        _additional_info: Option<&HashMap<String, Literal>>,
         interval: Interval,
         data: &mut Data,
         _msg_data: &mut MessageData,
-        _sender: &Option<mpsc::Sender<MSG>>,
+        _sender: Option<&mpsc::Sender<MSG>>,
     ) -> Result<Literal, ErrorInfo> {
-        let usage = "trim_left() => string";
-
-        if !args.is_empty() {
-            return Err(gen_error_info(
-                Position::new(interval, &data.context.flow),
-                format!("usage: {}", usage),
-            ));
-        }
+        require_n_args(0, &args, interval, data, "trim_left() => string")?;
 
         let s = &string.value;
-        Ok(PrimitiveString::get_literal(s.trim_start(), interval))
+        Ok(Self::get_literal(s.trim_start(), interval))
     }
 
+    #[allow(clippy::needless_pass_by_value)]
     fn trim_right(
-        string: &mut PrimitiveString,
-        args: &HashMap<String, Literal>,
-        _additional_info: &Option<HashMap<String, Literal>>,
+        string: &mut Self,
+        args: HashMap<String, Literal>,
+        _additional_info: Option<&HashMap<String, Literal>>,
         interval: Interval,
         data: &mut Data,
         _msg_data: &mut MessageData,
-        _sender: &Option<mpsc::Sender<MSG>>,
+        _sender: Option<&mpsc::Sender<MSG>>,
     ) -> Result<Literal, ErrorInfo> {
-        let usage = "trim_right() => string";
-
-        if !args.is_empty() {
-            return Err(gen_error_info(
-                Position::new(interval, &data.context.flow),
-                format!("usage: {}", usage),
-            ));
-        }
+        require_n_args(0, &args, interval, data, "trim_right() => string")?;
 
         let s = &string.value;
-        Ok(PrimitiveString::get_literal(s.trim_end(), interval))
+        Ok(Self::get_literal(s.trim_end(), interval))
     }
 }
 
 // memory type can be set tu 'use' because the result of the operation will create a new literal.
 impl PrimitiveString {
     fn abs(
-        string: &mut PrimitiveString,
-        args: &HashMap<String, Literal>,
-        additional_info: &Option<HashMap<String, Literal>>,
+        string: &mut Self,
+        args: HashMap<String, Literal>,
+        additional_info: Option<&HashMap<String, Literal>>,
         interval: Interval,
         data: &mut Data,
         msg_data: &mut MessageData,
-        sender: &Option<mpsc::Sender<MSG>>,
+        sender: Option<&mpsc::Sender<MSG>>,
     ) -> Result<Literal, ErrorInfo> {
         if let Ok(int) = string.value.parse::<i64>() {
             let mut primitive = PrimitiveInt::new(int);
@@ -1614,13 +1105,13 @@ impl PrimitiveString {
     }
 
     fn cos(
-        string: &mut PrimitiveString,
-        args: &HashMap<String, Literal>,
-        additional_info: &Option<HashMap<String, Literal>>,
+        string: &mut Self,
+        args: HashMap<String, Literal>,
+        additional_info: Option<&HashMap<String, Literal>>,
         interval: Interval,
         data: &mut Data,
         msg_data: &mut MessageData,
-        sender: &Option<mpsc::Sender<MSG>>,
+        sender: Option<&mpsc::Sender<MSG>>,
     ) -> Result<Literal, ErrorInfo> {
         if let Ok(int) = string.value.parse::<i64>() {
             let mut primitive = PrimitiveInt::new(int);
@@ -1665,13 +1156,13 @@ impl PrimitiveString {
     }
 
     fn ceil(
-        string: &mut PrimitiveString,
-        args: &HashMap<String, Literal>,
-        additional_info: &Option<HashMap<String, Literal>>,
+        string: &mut Self,
+        args: HashMap<String, Literal>,
+        additional_info: Option<&HashMap<String, Literal>>,
         interval: Interval,
         data: &mut Data,
         msg_data: &mut MessageData,
-        sender: &Option<mpsc::Sender<MSG>>,
+        sender: Option<&mpsc::Sender<MSG>>,
     ) -> Result<Literal, ErrorInfo> {
         if let Ok(int) = string.value.parse::<i64>() {
             let mut primitive = PrimitiveInt::new(int);
@@ -1715,13 +1206,13 @@ impl PrimitiveString {
     }
 
     fn pow(
-        string: &mut PrimitiveString,
-        args: &HashMap<String, Literal>,
-        additional_info: &Option<HashMap<String, Literal>>,
+        string: &mut Self,
+        args: HashMap<String, Literal>,
+        additional_info: Option<&HashMap<String, Literal>>,
         interval: Interval,
         data: &mut Data,
         msg_data: &mut MessageData,
-        sender: &Option<mpsc::Sender<MSG>>,
+        sender: Option<&mpsc::Sender<MSG>>,
     ) -> Result<Literal, ErrorInfo> {
         if let Ok(int) = string.value.parse::<i64>() {
             let mut primitive = PrimitiveInt::new(int);
@@ -1765,13 +1256,13 @@ impl PrimitiveString {
     }
 
     fn floor(
-        string: &mut PrimitiveString,
-        args: &HashMap<String, Literal>,
-        additional_info: &Option<HashMap<String, Literal>>,
+        string: &mut Self,
+        args: HashMap<String, Literal>,
+        additional_info: Option<&HashMap<String, Literal>>,
         interval: Interval,
         data: &mut Data,
         msg_data: &mut MessageData,
-        sender: &Option<mpsc::Sender<MSG>>,
+        sender: Option<&mpsc::Sender<MSG>>,
     ) -> Result<Literal, ErrorInfo> {
         if let Ok(int) = string.value.parse::<i64>() {
             let mut primitive = PrimitiveInt::new(int);
@@ -1815,13 +1306,13 @@ impl PrimitiveString {
     }
 
     fn round(
-        string: &mut PrimitiveString,
-        args: &HashMap<String, Literal>,
-        additional_info: &Option<HashMap<String, Literal>>,
+        string: &mut Self,
+        args: HashMap<String, Literal>,
+        additional_info: Option<&HashMap<String, Literal>>,
         interval: Interval,
         data: &mut Data,
         msg_data: &mut MessageData,
-        sender: &Option<mpsc::Sender<MSG>>,
+        sender: Option<&mpsc::Sender<MSG>>,
     ) -> Result<Literal, ErrorInfo> {
         if let Ok(int) = string.value.parse::<i64>() {
             let mut primitive = PrimitiveInt::new(int);
@@ -1865,13 +1356,13 @@ impl PrimitiveString {
     }
 
     fn sin(
-        string: &mut PrimitiveString,
-        args: &HashMap<String, Literal>,
-        additional_info: &Option<HashMap<String, Literal>>,
+        string: &mut Self,
+        args: HashMap<String, Literal>,
+        additional_info: Option<&HashMap<String, Literal>>,
         interval: Interval,
         data: &mut Data,
         msg_data: &mut MessageData,
-        sender: &Option<mpsc::Sender<MSG>>,
+        sender: Option<&mpsc::Sender<MSG>>,
     ) -> Result<Literal, ErrorInfo> {
         if let Ok(int) = string.value.parse::<i64>() {
             let mut primitive = PrimitiveInt::new(int);
@@ -1915,13 +1406,13 @@ impl PrimitiveString {
     }
 
     fn sqrt(
-        string: &mut PrimitiveString,
-        args: &HashMap<String, Literal>,
-        additional_info: &Option<HashMap<String, Literal>>,
+        string: &mut Self,
+        args: HashMap<String, Literal>,
+        additional_info: Option<&HashMap<String, Literal>>,
         interval: Interval,
         data: &mut Data,
         msg_data: &mut MessageData,
-        sender: &Option<mpsc::Sender<MSG>>,
+        sender: Option<&mpsc::Sender<MSG>>,
     ) -> Result<Literal, ErrorInfo> {
         if let Ok(int) = string.value.parse::<i64>() {
             let mut primitive = PrimitiveInt::new(int);
@@ -1965,13 +1456,13 @@ impl PrimitiveString {
     }
 
     fn tan(
-        string: &mut PrimitiveString,
-        args: &HashMap<String, Literal>,
-        additional_info: &Option<HashMap<String, Literal>>,
+        string: &mut Self,
+        args: HashMap<String, Literal>,
+        additional_info: Option<&HashMap<String, Literal>>,
         interval: Interval,
         data: &mut Data,
         msg_data: &mut MessageData,
-        sender: &Option<mpsc::Sender<MSG>>,
+        sender: Option<&mpsc::Sender<MSG>>,
     ) -> Result<Literal, ErrorInfo> {
         if let Ok(int) = string.value.parse::<i64>() {
             let mut primitive = PrimitiveInt::new(int);
@@ -2014,14 +1505,14 @@ impl PrimitiveString {
         ))
     }
 
-    fn to_int(
-        string: &mut PrimitiveString,
-        args: &HashMap<String, Literal>,
-        additional_info: &Option<HashMap<String, Literal>>,
+    fn convert_to_int(
+        string: &mut Self,
+        args: HashMap<String, Literal>,
+        additional_info: Option<&HashMap<String, Literal>>,
         interval: Interval,
         data: &mut Data,
         msg_data: &mut MessageData,
-        sender: &Option<mpsc::Sender<MSG>>,
+        sender: Option<&mpsc::Sender<MSG>>,
     ) -> Result<Literal, ErrorInfo> {
         if let Ok(int) = string.value.parse::<i64>() {
             let mut primitive = PrimitiveInt::new(int);
@@ -2064,14 +1555,14 @@ impl PrimitiveString {
         ))
     }
 
-    fn to_float(
-        string: &mut PrimitiveString,
-        args: &HashMap<String, Literal>,
-        additional_info: &Option<HashMap<String, Literal>>,
+    fn convert_to_float(
+        string: &mut Self,
+        args: HashMap<String, Literal>,
+        additional_info: Option<&HashMap<String, Literal>>,
         interval: Interval,
         data: &mut Data,
         msg_data: &mut MessageData,
-        sender: &Option<mpsc::Sender<MSG>>,
+        sender: Option<&mpsc::Sender<MSG>>,
     ) -> Result<Literal, ErrorInfo> {
         if let Ok(int) = string.value.parse::<i64>() {
             let mut primitive = PrimitiveInt::new(int);
@@ -2120,14 +1611,25 @@ impl PrimitiveString {
 ////////////////////////////////////////////////////////////////////////////////
 
 impl PrimitiveString {
-    pub fn new(value: &str) -> Self {
-        Self {
-            value: value.to_owned(),
+    #[must_use]
+    pub fn new(value: String) -> Self {
+        Self { value }
+    }
+
+    #[must_use]
+    pub fn to_literal(self, interval: Interval) -> Literal {
+        Literal {
+            content_type: "string".to_owned(),
+            primitive: Box::new(self),
+            additional_info: None,
+            secure_variable: false,
+            interval,
         }
     }
 
+    #[must_use]
     pub fn get_literal(string: &str, interval: Interval) -> Literal {
-        let primitive = Box::new(PrimitiveString::new(string));
+        let primitive = Box::new(Self::new(string.to_owned()));
 
         Literal {
             content_type: "string".to_owned(),
@@ -2138,26 +1640,64 @@ impl PrimitiveString {
         }
     }
 
-    pub fn get_array_char(string: String, interval: Interval) -> Vec<Literal> {
-        let array = string
+    #[must_use]
+    pub fn get_array_char(string: &str, interval: Interval) -> Vec<Literal> {
+        string
             .chars()
             .map(|c| {
-                let interval = interval;
-                PrimitiveString::get_literal(&c.to_string(), interval)
+                let mut buffer = [0; 4];
+                Self::get_literal(c.encode_utf8(&mut buffer), interval)
             })
-            .collect::<Vec<Literal>>();
+            .collect::<Vec<Literal>>()
+    }
+}
 
-        array
+impl PrimitiveString {
+    fn do_op<FI: FnOnce(&i64, &i64) -> Option<i64>, FF: FnOnce(f64, f64) -> f64>(
+        &self,
+        right: &dyn Primitive,
+        fi: FI,
+        ff: FF,
+        op: &str,
+    ) -> Result<Box<dyn Primitive>, String> {
+        let Some(rhs) = right.as_any().downcast_ref::<Self>() else {
+            return Err(ERROR_STRING_RHS.to_owned());
+        };
+
+        let lhs = get_integer(&self.value);
+        let rhs = get_integer(&rhs.value);
+        let args = lhs.zip(rhs);
+
+        if let Some((left, right)) = args {
+            if let (Integer::Int(left), Integer::Int(right)) = (left, right)
+                && let Some(result) = fi(&left, &right)
+            {
+                return Ok(Box::new(PrimitiveInt::new(result)));
+            }
+            return Ok(Box::new(PrimitiveFloat::new(ff(
+                left.to_f64(),
+                right.to_f64(),
+            ))));
+        }
+
+        Err(format!(
+            "{} {:?} {op} {:?}",
+            ERROR_ILLEGAL_OPERATION,
+            self.get_type(),
+            right.get_type()
+        ))
     }
 }
 
 #[typetag::serde]
 impl Primitive for PrimitiveString {
     fn is_eq(&self, other: &dyn Primitive) -> bool {
-        if let Some(rhs) = other.as_any().downcast_ref::<PrimitiveString>() {
+        if let Some(rhs) = other.as_any().downcast_ref::<Self>() {
             return match (get_integer(&self.value), get_integer(&rhs.value)) {
-                (Ok(Integer::Int(lhs)), Ok(Integer::Float(rhs))) => (lhs as f64) == rhs,
-                (Ok(Integer::Float(lhs)), Ok(Integer::Int(rhs))) => lhs == (rhs as f64),
+                #[allow(clippy::cast_precision_loss)]
+                (Some(Integer::Int(lhs)), Some(Integer::Float(rhs))) => (lhs as f64) == rhs,
+                #[allow(clippy::cast_precision_loss)]
+                (Some(Integer::Float(lhs)), Some(Integer::Int(rhs))) => lhs == (rhs as f64),
                 _ => self.value == rhs.value,
             };
         }
@@ -2166,10 +1706,16 @@ impl Primitive for PrimitiveString {
     }
 
     fn is_cmp(&self, other: &dyn Primitive) -> Option<Ordering> {
-        if let Some(rhs) = other.as_any().downcast_ref::<PrimitiveString>() {
+        if let Some(rhs) = other.as_any().downcast_ref::<Self>() {
             return match (get_integer(&self.value), get_integer(&rhs.value)) {
-                (Ok(Integer::Int(lhs)), Ok(Integer::Float(rhs))) => (lhs as f64).partial_cmp(&rhs),
-                (Ok(Integer::Float(lhs)), Ok(Integer::Int(rhs))) => lhs.partial_cmp(&(rhs as f64)),
+                #[allow(clippy::cast_precision_loss)]
+                (Some(Integer::Int(lhs)), Some(Integer::Float(rhs))) => {
+                    (lhs as f64).partial_cmp(&rhs)
+                }
+                #[allow(clippy::cast_precision_loss)]
+                (Some(Integer::Float(lhs)), Some(Integer::Int(rhs))) => {
+                    lhs.partial_cmp(&(rhs as f64))
+                }
                 _ => self.value.partial_cmp(&rhs.value),
             };
         }
@@ -2178,177 +1724,56 @@ impl Primitive for PrimitiveString {
     }
 
     fn do_add(&self, other: &dyn Primitive) -> Result<Box<dyn Primitive>, String> {
-        let rhs = match other.as_any().downcast_ref::<PrimitiveString>() {
-            Some(res) => res,
-            None => {
-                return Err(ERROR_STRING_RHS.to_owned());
-            }
-        };
-
-        if let Ok(number) = get_integer(&self.value) {
-            match (number, get_integer(&rhs.value)) {
-                (Integer::Int(lhs), Ok(Integer::Int(rhs))) => {
-                    Ok(Box::new(PrimitiveInt::new(lhs + rhs)))
-                }
-                (Integer::Float(lhs), Ok(Integer::Float(rhs))) => {
-                    Ok(Box::new(PrimitiveFloat::new(lhs + rhs)))
-                }
-                (Integer::Int(lhs), Ok(Integer::Float(rhs))) => {
-                    Ok(Box::new(PrimitiveFloat::new(lhs as f64 + rhs)))
-                }
-                (Integer::Float(lhs), Ok(Integer::Int(rhs))) => {
-                    Ok(Box::new(PrimitiveFloat::new(lhs + rhs as f64)))
-                }
-                _ => Err(format!(
-                    "{} {:?} + {:?}",
-                    ERROR_ILLEGAL_OPERATION,
-                    self.get_type(),
-                    other.get_type()
-                )),
-            }
-        } else {
-            let mut new_string = self.value.clone();
-
-            new_string.push_str(&rhs.value);
-
-            Ok(Box::new(PrimitiveString::new(&new_string)))
-        }
+        self.do_op(other, checked::CheckedAdd::checked_add, ops::Add::add, "+")
     }
 
     fn do_sub(&self, other: &dyn Primitive) -> Result<Box<dyn Primitive>, String> {
-        let rhs = match other.as_any().downcast_ref::<PrimitiveString>() {
-            Some(res) => res,
-            None => {
-                return Err(ERROR_STRING_RHS.to_owned());
-            }
-        };
-
-        match (get_integer(&self.value), get_integer(&rhs.value)) {
-            (Ok(Integer::Int(lhs)), Ok(Integer::Int(rhs))) => {
-                Ok(Box::new(PrimitiveInt::new(lhs - rhs)))
-            }
-            (Ok(Integer::Float(lhs)), Ok(Integer::Float(rhs))) => {
-                Ok(Box::new(PrimitiveFloat::new(lhs - rhs)))
-            }
-            (Ok(Integer::Int(lhs)), Ok(Integer::Float(rhs))) => {
-                Ok(Box::new(PrimitiveFloat::new(lhs as f64 - rhs)))
-            }
-            (Ok(Integer::Float(lhs)), Ok(Integer::Int(rhs))) => {
-                Ok(Box::new(PrimitiveFloat::new(lhs - rhs as f64)))
-            }
-            _ => Err(format!(
-                "{} {:?} - {:?}",
-                ERROR_ILLEGAL_OPERATION,
-                self.get_type(),
-                other.get_type()
-            )),
-        }
+        self.do_op(other, checked::CheckedSub::checked_sub, ops::Sub::sub, "-")
     }
 
     fn do_div(&self, other: &dyn Primitive) -> Result<Box<dyn Primitive>, String> {
-        let rhs = match other.as_any().downcast_ref::<PrimitiveString>() {
-            Some(res) => res,
-            None => {
-                return Err(ERROR_STRING_RHS.to_owned());
-            }
+        let Some(rhs) = other.as_any().downcast_ref::<Self>() else {
+            return Err(ERROR_STRING_RHS.to_owned());
         };
 
-        match (get_integer(&self.value), get_integer(&rhs.value)) {
-            (Ok(Integer::Int(lhs)), Ok(Integer::Int(rhs))) => {
-                check_division_by_zero_i64(lhs, rhs)?;
-
-                Ok(Box::new(PrimitiveInt::new(lhs / rhs)))
-            }
-            (Ok(Integer::Float(lhs)), Ok(Integer::Float(rhs))) => {
-                check_division_by_zero_i64(lhs as i64, rhs as i64)?;
-
-                Ok(Box::new(PrimitiveFloat::new(lhs / rhs)))
-            }
-            (Ok(Integer::Int(lhs)), Ok(Integer::Float(rhs))) => {
-                check_division_by_zero_i64(lhs, rhs as i64)?;
-
-                Ok(Box::new(PrimitiveFloat::new(lhs as f64 / rhs)))
-            }
-            (Ok(Integer::Float(lhs)), Ok(Integer::Int(rhs))) => {
-                check_division_by_zero_i64(lhs as i64, rhs)?;
-
-                Ok(Box::new(PrimitiveFloat::new(lhs / rhs as f64)))
-            }
-            _ => Err(format!(
-                "{} {:?} / {:?}",
-                ERROR_ILLEGAL_OPERATION,
-                self.get_type(),
-                other.get_type()
-            )),
+        let args = get_integer(&self.value)
+            .map(Integer::to_i64)
+            .zip(get_integer(&rhs.value).map(Integer::to_i64));
+        if let Some((left, right)) = args {
+            check_division_preconditions(left, right)?;
+            #[allow(clippy::cast_precision_loss)]
+            return Ok(Box::new(PrimitiveFloat::new((left / right) as f64)));
         }
+
+        Err(format!(
+            "{} {:?} / {:?}",
+            ERROR_ILLEGAL_OPERATION,
+            self.get_type(),
+            other.get_type()
+        ))
     }
 
     fn do_mul(&self, other: &dyn Primitive) -> Result<Box<dyn Primitive>, String> {
-        let rhs = match other.as_any().downcast_ref::<PrimitiveString>() {
-            Some(res) => res,
-            None => {
-                return Err(ERROR_STRING_RHS.to_owned());
-            }
-        };
-
-        match (get_integer(&self.value), get_integer(&rhs.value)) {
-            (Ok(Integer::Int(lhs)), Ok(Integer::Int(rhs))) => {
-                Ok(Box::new(PrimitiveInt::new(lhs * rhs)))
-            }
-            (Ok(Integer::Float(lhs)), Ok(Integer::Float(rhs))) => {
-                Ok(Box::new(PrimitiveFloat::new(lhs * rhs)))
-            }
-            (Ok(Integer::Int(lhs)), Ok(Integer::Float(rhs))) => {
-                Ok(Box::new(PrimitiveFloat::new(lhs as f64 * rhs)))
-            }
-            (Ok(Integer::Float(lhs)), Ok(Integer::Int(rhs))) => {
-                Ok(Box::new(PrimitiveFloat::new(lhs * rhs as f64)))
-            }
-            _ => Err(format!(
-                "{} {:?} * {:?}",
-                ERROR_ILLEGAL_OPERATION,
-                self.get_type(),
-                other.get_type()
-            )),
-        }
+        self.do_op(other, checked::CheckedMul::checked_mul, ops::Mul::mul, "*")
     }
 
     fn do_rem(&self, other: &dyn Primitive) -> Result<Box<dyn Primitive>, String> {
-        let rhs = match other.as_any().downcast_ref::<PrimitiveString>() {
-            Some(res) => res,
-            None => {
-                return Err(ERROR_STRING_RHS.to_owned());
-            }
-        };
-
-        match (get_integer(&self.value), get_integer(&rhs.value)) {
-            (Ok(Integer::Int(lhs)), Ok(Integer::Int(rhs))) => {
-                Ok(Box::new(PrimitiveInt::new(lhs % rhs)))
-            }
-            (Ok(Integer::Float(lhs)), Ok(Integer::Float(rhs))) => {
-                Ok(Box::new(PrimitiveFloat::new(lhs % rhs)))
-            }
-            (Ok(Integer::Int(lhs)), Ok(Integer::Float(rhs))) => {
-                Ok(Box::new(PrimitiveFloat::new(lhs as f64 % rhs)))
-            }
-            (Ok(Integer::Float(lhs)), Ok(Integer::Int(rhs))) => {
-                Ok(Box::new(PrimitiveFloat::new(lhs * rhs as f64)))
-            }
-            _ => Err(format!(
-                "{} {:?} % {:?}",
-                ERROR_ILLEGAL_OPERATION,
-                self.get_type(),
-                other.get_type()
-            )),
-        }
+        self.do_op(other, checked::CheckedRem::checked_rem, ops::Rem::rem, "%")
     }
 
     fn as_debug(&self) -> &dyn std::fmt::Debug {
         self
     }
 
-    fn as_any(&self) -> &dyn std::any::Any {
+    fn as_any(&self) -> &dyn Any {
         self
+    }
+    fn into_any(self: Box<Self>) -> Box<dyn Any> {
+        self
+    }
+
+    fn into_value(self: Box<Self>) -> Box<dyn Any> {
+        Box::new(self.value)
     }
 
     fn get_type(&self) -> PrimitiveType {
@@ -2368,18 +1793,18 @@ impl Primitive for PrimitiveString {
     }
 
     fn to_string(&self) -> String {
-        self.value.to_owned()
+        self.value.clone()
     }
 
     fn as_bool(&self) -> bool {
         true
     }
 
-    fn get_value(&self) -> &dyn std::any::Any {
+    fn get_value(&self) -> &dyn Any {
         &self.value
     }
 
-    fn get_mut_value(&mut self) -> &mut dyn std::any::Any {
+    fn get_mut_value(&mut self) -> &mut dyn Any {
         &mut self.value
     }
 
@@ -2390,7 +1815,7 @@ impl Primitive for PrimitiveString {
             "text".to_owned(),
             Literal {
                 content_type: "string".to_owned(),
-                primitive: Box::new(PrimitiveString::new(&self.value)),
+                primitive: Box::new(Self::new(self.value.clone())),
                 additional_info: None,
                 secure_variable: false,
                 interval: Interval {
@@ -2404,7 +1829,7 @@ impl Primitive for PrimitiveString {
         );
 
         let mut result = PrimitiveObject::get_literal(
-            &hashmap,
+            hashmap,
             Interval {
                 start_column: 0,
                 start_line: 0,
@@ -2424,14 +1849,14 @@ impl Primitive for PrimitiveString {
     fn do_exec(
         &mut self,
         name: &str,
-        args: &HashMap<String, Literal>,
+        args: HashMap<String, Literal>,
         mem_type: &MemoryType,
-        additional_info: &Option<HashMap<String, Literal>>,
+        additional_info: Option<&HashMap<String, Literal>>,
         interval: Interval,
         _content_type: &ContentType,
         data: &mut Data,
         msg_data: &mut MessageData,
-        sender: &Option<mpsc::Sender<MSG>>,
+        sender: Option<&mpsc::Sender<MSG>>,
     ) -> Result<(Literal, Right), ErrorInfo> {
         if let Some((f, right)) = FUNCTIONS.get(name) {
             if *mem_type == MemoryType::Constant && *right == Right::Write {
@@ -2439,24 +1864,23 @@ impl Primitive for PrimitiveString {
                     Position::new(interval, &data.context.flow),
                     ERROR_CONSTANT_MUTABLE_FUNCTION.to_string(),
                 ));
-            } else {
-                let res = f(
-                    self,
-                    args,
-                    additional_info,
-                    interval,
-                    data,
-                    msg_data,
-                    sender,
-                )?;
-
-                return Ok((res, *right));
             }
+            let res = f(
+                self,
+                args,
+                additional_info,
+                interval,
+                data,
+                msg_data,
+                sender,
+            )?;
+
+            return Ok((res, *right));
         }
 
         Err(gen_error_info(
             Position::new(interval, &data.context.flow),
-            format!("[{}] {}", name, ERROR_STRING_UNKNOWN_METHOD),
+            format!("[{name}] {ERROR_STRING_UNKNOWN_METHOD}"),
         ))
     }
 }

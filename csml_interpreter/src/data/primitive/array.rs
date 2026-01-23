@@ -1,6 +1,12 @@
 use crate::data::position::Position;
+use crate::data::primitive::common;
+use crate::data::primitive::common::{
+    get_args, get_index_args, get_int_arg, get_int_args, get_literal_args, get_string_args,
+};
+use crate::data::primitive::utils::{arg_name, illegal_math_ops, impl_basic_cmp, require_n_args};
 use crate::data::{
-    data::{init_child_context, init_child_scope, Data},
+    ArgsType, Interval, Literal, MSG, MemoryType, Message, MessageData,
+    core::{Data, init_child_context, init_child_scope},
     literal,
     literal::ContentType,
     primitive::{
@@ -8,33 +14,37 @@ use crate::data::{
         PrimitiveString, PrimitiveType, Right,
     },
     tokens::TYPES,
-    ArgsType, Interval, Literal, MemoryType, Message, MessageData, MSG,
 };
-use crate::error_format::*;
+use crate::error_format::{
+    ERROR_ARRAY_BOUNDS, ERROR_ARRAY_INDEX, ERROR_ARRAY_INIT, ERROR_ARRAY_INSERT_AT,
+    ERROR_ARRAY_INSERT_AT_INT, ERROR_ARRAY_JOIN, ERROR_ARRAY_OVERFLOW, ERROR_ARRAY_POP,
+    ERROR_ARRAY_REMOVE_AT, ERROR_ARRAY_UNKNOWN_METHOD, ERROR_CONSTANT_MUTABLE_FUNCTION, ErrorInfo,
+    OVERFLOWING_OPERATION, gen_error_info,
+};
 use crate::interpreter::variable_handler::resolve_csml_object::{
     exec_closure, insert_args_in_scope_memory, insert_memories_in_scope_memory,
 };
+use num_traits::ToPrimitive;
 use phf::phf_map;
-use rand::seq::SliceRandom;
 use rand::Rng;
+use rand::seq::SliceRandom;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
+use std::any::Any;
 use std::cmp::Ordering;
-use std::usize;
 use std::{collections::HashMap, sync::mpsc};
-
 ////////////////////////////////////////////////////////////////////////////////
 // DATA STRUCTURES
 ////////////////////////////////////////////////////////////////////////////////
 
 type PrimitiveMethod = fn(
     array: &mut PrimitiveArray,
-    args: &HashMap<String, Literal>,
-    additional_info: &Option<HashMap<String, Literal>>,
+    args: HashMap<String, Literal>,
+    additional_info: Option<&HashMap<String, Literal>>,
     interval: Interval,
     data: &mut Data,
     msg_data: &mut MessageData,
-    sender: &Option<mpsc::Sender<MSG>>,
+    sender: Option<&mpsc::Sender<MSG>>,
 ) -> Result<Literal, ErrorInfo>;
 
 const FUNCTIONS: phf::Map<&'static str, (PrimitiveMethod, Right)> = phf_map! {
@@ -43,8 +53,8 @@ const FUNCTIONS: phf::Map<&'static str, (PrimitiveMethod, Right)> = phf_map! {
     "is_float" => (PrimitiveArray::is_float as PrimitiveMethod, Right::Read),
     "type_of" => (PrimitiveArray::type_of as PrimitiveMethod, Right::Read),
     "get_info" => (PrimitiveArray::get_info as PrimitiveMethod, Right::Read),
-    "is_error" => (PrimitiveArray::is_error as PrimitiveMethod, Right::Read),
-    "to_string" => (PrimitiveArray::to_string as PrimitiveMethod, Right::Read),
+    "is_error" => ((|_, _, additional_info, interval, _, _, _| common::is_error(additional_info, interval)) as PrimitiveMethod, Right::Read),
+    "to_string" => (PrimitiveArray::convert_to_string as PrimitiveMethod, Right::Read),
 
     "init" => (PrimitiveArray::init as PrimitiveMethod, Right::Read),
     "find" => (PrimitiveArray::find as PrimitiveMethod, Right::Read),
@@ -76,403 +86,263 @@ pub struct PrimitiveArray {
 // METHOD FUNCTIONS
 ////////////////////////////////////////////////////////////////////////////////
 
-fn check_index(
+fn cast_to_index(
     index: i64,
-    length: i64,
-    flow_name: &str,
+    length: usize,
+    data: &Data,
     interval: Interval,
-) -> Result<(), ErrorInfo> {
-    if index.is_negative() {
+) -> Result<usize, ErrorInfo> {
+    let Some(index) = index.to_usize() else {
         return Err(gen_error_info(
-            Position::new(interval, flow_name),
-            ERROR_ARRAY_NEGATIVE.to_owned(),
+            Position::new(interval, &data.context.flow),
+            ERROR_ARRAY_BOUNDS.to_owned(),
         ));
-    }
+    };
 
     if index > length {
         return Err(gen_error_info(
-            Position::new(interval, flow_name),
+            Position::new(interval, &data.context.flow),
             ERROR_ARRAY_INDEX.to_owned(),
         ));
     }
 
-    Ok(())
+    Ok(index)
 }
 
 impl PrimitiveArray {
+    #[allow(clippy::needless_pass_by_value)]
     fn is_number(
-        _array: &mut PrimitiveArray,
-        args: &HashMap<String, Literal>,
-        _additional_info: &Option<HashMap<String, Literal>>,
+        _array: &mut Self,
+        args: HashMap<String, Literal>,
+        _additional_info: Option<&HashMap<String, Literal>>,
         interval: Interval,
         data: &mut Data,
         _msg_data: &mut MessageData,
-        _sender: &Option<mpsc::Sender<MSG>>,
+        _sender: Option<&mpsc::Sender<MSG>>,
     ) -> Result<Literal, ErrorInfo> {
-        let usage = "is_number() => boolean";
-
-        if !args.is_empty() {
-            return Err(gen_error_info(
-                Position::new(interval, &data.context.flow),
-                format!("usage: {}", usage),
-            ));
-        }
+        require_n_args(0, &args, interval, data, "is_number() => boolean")?;
 
         Ok(PrimitiveBoolean::get_literal(false, interval))
     }
 
+    #[allow(clippy::needless_pass_by_value)]
     fn is_int(
-        _array: &mut PrimitiveArray,
-        args: &HashMap<String, Literal>,
-        _additional_info: &Option<HashMap<String, Literal>>,
+        _array: &mut Self,
+        args: HashMap<String, Literal>,
+        _additional_info: Option<&HashMap<String, Literal>>,
         interval: Interval,
         data: &mut Data,
         _msg_data: &mut MessageData,
-        _sender: &Option<mpsc::Sender<MSG>>,
+        _sender: Option<&mpsc::Sender<MSG>>,
     ) -> Result<Literal, ErrorInfo> {
-        let usage = "is_int() => boolean";
-
-        if !args.is_empty() {
-            return Err(gen_error_info(
-                Position::new(interval, &data.context.flow),
-                format!("usage: {}", usage),
-            ));
-        }
+        require_n_args(0, &args, interval, data, "is_int() => boolean")?;
 
         Ok(PrimitiveBoolean::get_literal(false, interval))
     }
 
+    #[allow(clippy::needless_pass_by_value)]
     fn is_float(
-        _array: &mut PrimitiveArray,
-        args: &HashMap<String, Literal>,
-        _additional_info: &Option<HashMap<String, Literal>>,
+        _array: &mut Self,
+        args: HashMap<String, Literal>,
+        _additional_info: Option<&HashMap<String, Literal>>,
         interval: Interval,
         data: &mut Data,
         _msg_data: &mut MessageData,
-        _sender: &Option<mpsc::Sender<MSG>>,
+        _sender: Option<&mpsc::Sender<MSG>>,
     ) -> Result<Literal, ErrorInfo> {
-        let usage = "is_float() => boolean";
-
-        if !args.is_empty() {
-            return Err(gen_error_info(
-                Position::new(interval, &data.context.flow),
-                format!("usage: {}", usage),
-            ));
-        }
+        require_n_args(0, &args, interval, data, "is_float() => boolean")?;
 
         Ok(PrimitiveBoolean::get_literal(false, interval))
     }
 
+    #[allow(clippy::needless_pass_by_value)]
     fn type_of(
-        _array: &mut PrimitiveArray,
-        args: &HashMap<String, Literal>,
-        _additional_info: &Option<HashMap<String, Literal>>,
+        _array: &mut Self,
+        args: HashMap<String, Literal>,
+        _additional_info: Option<&HashMap<String, Literal>>,
         interval: Interval,
         data: &mut Data,
         _msg_data: &mut MessageData,
-        _sender: &Option<mpsc::Sender<MSG>>,
+        _sender: Option<&mpsc::Sender<MSG>>,
     ) -> Result<Literal, ErrorInfo> {
-        let usage = "type_of() => string";
-
-        if !args.is_empty() {
-            return Err(gen_error_info(
-                Position::new(interval, &data.context.flow),
-                format!("usage: {}", usage),
-            ));
-        }
+        require_n_args(0, &args, interval, data, "type_of() => string")?;
 
         Ok(PrimitiveString::get_literal("array", interval))
     }
 
+    #[allow(clippy::needless_pass_by_value)]
     fn get_info(
-        _array: &mut PrimitiveArray,
-        args: &HashMap<String, Literal>,
-        additional_info: &Option<HashMap<String, Literal>>,
+        _array: &mut Self,
+        args: HashMap<String, Literal>,
+        additional_info: Option<&HashMap<String, Literal>>,
         interval: Interval,
         data: &mut Data,
         _msg_data: &mut MessageData,
-        _sender: &Option<mpsc::Sender<MSG>>,
+        _sender: Option<&mpsc::Sender<MSG>>,
     ) -> Result<Literal, ErrorInfo> {
-        literal::get_info(args, additional_info, interval, data)
+        literal::get_info(&args, additional_info, interval, data)
     }
 
-    fn is_error(
-        _array: &mut PrimitiveArray,
-        _args: &HashMap<String, Literal>,
-        additional_info: &Option<HashMap<String, Literal>>,
-        interval: Interval,
-        _data: &mut Data,
-        _msg_data: &mut MessageData,
-        _sender: &Option<mpsc::Sender<MSG>>,
-    ) -> Result<Literal, ErrorInfo> {
-        match additional_info {
-            Some(map) if map.contains_key("error") => {
-                Ok(PrimitiveBoolean::get_literal(true, interval))
-            }
-            _ => Ok(PrimitiveBoolean::get_literal(false, interval)),
-        }
-    }
-
-    fn to_string(
-        array: &mut PrimitiveArray,
-        args: &HashMap<String, Literal>,
-        _additional_info: &Option<HashMap<String, Literal>>,
+    #[allow(clippy::needless_pass_by_value)]
+    fn convert_to_string(
+        array: &mut Self,
+        args: HashMap<String, Literal>,
+        _additional_info: Option<&HashMap<String, Literal>>,
         interval: Interval,
         data: &mut Data,
         _msg_data: &mut MessageData,
-        _sender: &Option<mpsc::Sender<MSG>>,
+        _sender: Option<&mpsc::Sender<MSG>>,
     ) -> Result<Literal, ErrorInfo> {
-        let usage = "to_string() => string";
-
-        if !args.is_empty() {
-            return Err(gen_error_info(
-                Position::new(interval, &data.context.flow),
-                format!("usage: {}", usage),
-            ));
-        }
+        require_n_args(0, &args, interval, data, "to_string() => string")?;
 
         Ok(PrimitiveString::get_literal(&array.to_string(), interval))
     }
 }
 
 impl PrimitiveArray {
+    #[allow(clippy::needless_pass_by_value)]
     fn init(
-        _array: &mut PrimitiveArray,
-        args: &HashMap<String, Literal>,
-        _additional_info: &Option<HashMap<String, Literal>>,
+        _array: &mut Self,
+        args: HashMap<String, Literal>,
+        _additional_info: Option<&HashMap<String, Literal>>,
         interval: Interval,
         data: &mut Data,
         _msg_data: &mut MessageData,
-        _sender: &Option<mpsc::Sender<MSG>>,
+        _sender: Option<&mpsc::Sender<MSG>>,
     ) -> Result<Literal, ErrorInfo> {
-        let usage = "init(capacity: Int) => [Literal]";
+        let [capacity] = get_int_args(
+            &args,
+            data,
+            interval,
+            ERROR_ARRAY_INIT,
+            "init(capacity: Int) => [Literal]",
+        )?;
+        let vec = vec![PrimitiveNull::get_literal(interval); capacity];
 
-        if args.len() != 1 {
-            return Err(gen_error_info(
-                Position::new(interval, &data.context.flow),
-                format!("usage: {}", usage),
-            ));
-        }
-
-        let capacity = match args.get("arg0") {
-            Some(res) if res.primitive.get_type() == PrimitiveType::PrimitiveInt => {
-                *Literal::get_value::<i64>(
-                    &res.primitive,
-                    &data.context.flow,
-                    interval,
-                    ERROR_ARRAY_INSERT_AT.to_owned(),
-                )? as usize
-            }
-            _ => {
-                return Err(gen_error_info(
-                    Position::new(interval, &data.context.flow),
-                    ERROR_ARRAY_INSERT_AT.to_owned(),
-                ));
-            }
-        };
-
-        let mut vec = Vec::with_capacity(capacity);
-        for _ in 0..capacity {
-            vec.push(PrimitiveNull::get_literal(interval));
-        }
-
-        Ok(PrimitiveArray::get_literal(&vec, interval))
+        Ok(Self::get_literal(vec, interval))
     }
 
+    #[allow(clippy::needless_pass_by_value)]
     fn find(
-        array: &mut PrimitiveArray,
-        args: &HashMap<String, Literal>,
-        _additional_info: &Option<HashMap<String, Literal>>,
+        array: &mut Self,
+        args: HashMap<String, Literal>,
+        _additional_info: Option<&HashMap<String, Literal>>,
         interval: Interval,
         data: &mut Data,
         _msg_data: &mut MessageData,
-        _sender: &Option<mpsc::Sender<MSG>>,
+        _sender: Option<&mpsc::Sender<MSG>>,
     ) -> Result<Literal, ErrorInfo> {
         let usage = "find(value: primitive) => array";
 
-        if array.value.len() + args.len() == usize::MAX {
-            return Err(gen_error_info(
-                Position::new(interval, &data.context.flow),
-                format!("{} {}", ERROR_ARRAY_OVERFLOW, usize::MAX),
-            ));
-        }
+        let [value]: [_; 1] = get_literal_args(&args, data, interval, usage, usage)?;
 
-        let value = match args.get("arg0") {
-            Some(res) => res,
-            _ => {
-                return Err(gen_error_info(
-                    Position::new(interval, &data.context.flow),
-                    format!("usage: {}", usage),
-                ));
-            }
-        };
+        let vector = array
+            .value
+            .iter()
+            .filter(|&literal| literal == value)
+            .cloned()
+            .collect();
 
-        let mut vector = Vec::new();
-
-        for literal in array.value.iter() {
-            if literal == value {
-                vector.push(literal.to_owned());
-            }
-        }
-
-        if !vector.is_empty() {
-            return Ok(PrimitiveArray::get_literal(&vector, interval));
-        }
-
-        Ok(PrimitiveArray::get_literal(&[], interval))
+        Ok(Self::get_literal(vector, interval))
     }
 
+    #[allow(clippy::needless_pass_by_value)]
     fn is_empty(
-        array: &mut PrimitiveArray,
-        args: &HashMap<String, Literal>,
-        _additional_info: &Option<HashMap<String, Literal>>,
+        array: &mut Self,
+        args: HashMap<String, Literal>,
+        _additional_info: Option<&HashMap<String, Literal>>,
         interval: Interval,
         data: &mut Data,
         _msg_data: &mut MessageData,
-        _sender: &Option<mpsc::Sender<MSG>>,
+        _sender: Option<&mpsc::Sender<MSG>>,
     ) -> Result<Literal, ErrorInfo> {
-        let usage = "is_empty() => boolean";
-
-        if !args.is_empty() {
-            return Err(gen_error_info(
-                Position::new(interval, &data.context.flow),
-                format!("usage: {}", usage),
-            ));
-        }
+        require_n_args(0, &args, interval, data, "is_empty() => boolean")?;
 
         let result = array.value.is_empty();
 
         Ok(PrimitiveBoolean::get_literal(result, interval))
     }
 
+    #[allow(clippy::needless_pass_by_value)]
     fn insert_at(
-        array: &mut PrimitiveArray,
-        args: &HashMap<String, Literal>,
-        _additional_info: &Option<HashMap<String, Literal>>,
+        array: &mut Self,
+        mut args: HashMap<String, Literal>,
+        _additional_info: Option<&HashMap<String, Literal>>,
         interval: Interval,
         data: &mut Data,
         _msg_data: &mut MessageData,
-        _sender: &Option<mpsc::Sender<MSG>>,
+        _sender: Option<&mpsc::Sender<MSG>>,
     ) -> Result<Literal, ErrorInfo> {
         let usage = "insert_at(index: int, value: primitive) => null";
 
-        if args.len() != 2 {
-            return Err(gen_error_info(
-                Position::new(interval, &data.context.flow),
-                format!("usage: {}", usage),
-            ));
-        }
+        require_n_args(2, &args, interval, data, usage)?;
 
-        let index = match args.get("arg0") {
-            Some(res) if res.primitive.get_type() == PrimitiveType::PrimitiveInt => {
-                Literal::get_value::<i64>(
-                    &res.primitive,
-                    &data.context.flow,
-                    interval,
-                    ERROR_ARRAY_INSERT_AT.to_owned(),
-                )?
-            }
-            _ => {
-                return Err(gen_error_info(
-                    Position::new(interval, &data.context.flow),
-                    ERROR_ARRAY_INSERT_AT.to_owned(),
-                ));
-            }
-        };
-
-        let value = match args.get("arg1") {
-            Some(res) => res,
-            _ => {
-                return Err(gen_error_info(
-                    Position::new(interval, &data.context.flow),
-                    format!("usage: {}", usage),
-                ));
-            }
-        };
-
-        check_index(
-            *index,
-            array.value.len() as i64,
-            &data.context.flow,
+        let index = get_int_arg(
+            arg_name!(0),
+            &args,
             interval,
+            data,
+            ERROR_ARRAY_INSERT_AT_INT,
         )?;
 
-        array.value.insert(*index as usize, value.clone());
+        let Some(value) = args.remove(arg_name!(1)) else {
+            return Err(gen_error_info(
+                Position::new(interval, &data.context.flow),
+                format!("usage: {usage}"),
+            ));
+        };
+
+        let index = cast_to_index(index, array.value.len(), data, interval)?;
+
+        array.value.insert(index, value);
 
         Ok(PrimitiveNull::get_literal(interval))
     }
 
+    #[allow(clippy::needless_pass_by_value)]
     fn index_of(
-        array: &mut PrimitiveArray,
-        args: &HashMap<String, Literal>,
-        _additional_info: &Option<HashMap<String, Literal>>,
+        array: &mut Self,
+        args: HashMap<String, Literal>,
+        _additional_info: Option<&HashMap<String, Literal>>,
         interval: Interval,
         data: &mut Data,
         _msg_data: &mut MessageData,
-        _sender: &Option<mpsc::Sender<MSG>>,
+        _sender: Option<&mpsc::Sender<MSG>>,
     ) -> Result<Literal, ErrorInfo> {
         let usage = "index_of(value: primitive) => int";
 
-        if args.len() != 1 {
-            return Err(gen_error_info(
-                Position::new(interval, &data.context.flow),
-                format!("usage: {}", usage),
-            ));
-        }
-
-        let value = match args.get("arg0") {
-            Some(res) => res,
-            None => {
-                return Err(gen_error_info(
-                    Position::new(interval, &data.context.flow),
-                    format!("usage: {}", usage),
-                ));
-            }
-        };
+        let [value]: [_; 1] = get_literal_args(&args, data, interval, usage, usage)?;
 
         for (index, literal) in array.value.iter().enumerate() {
             if literal == value {
-                return Ok(PrimitiveInt::get_literal(index as i64, interval));
+                let index = index.to_i64().ok_or(gen_error_info(
+                    Position::new(interval, &data.context.flow),
+                    OVERFLOWING_OPERATION.to_owned(),
+                ))?;
+                return Ok(PrimitiveInt::get_literal(index, interval));
             }
         }
 
         Ok(PrimitiveInt::get_literal(-1, interval))
     }
 
+    #[allow(clippy::needless_pass_by_value)]
     fn join(
-        array: &mut PrimitiveArray,
-        args: &HashMap<String, Literal>,
-        _additional_info: &Option<HashMap<String, Literal>>,
+        array: &mut Self,
+        args: HashMap<String, Literal>,
+        _additional_info: Option<&HashMap<String, Literal>>,
         interval: Interval,
         data: &mut Data,
         _msg_data: &mut MessageData,
-        _sender: &Option<mpsc::Sender<MSG>>,
+        _sender: Option<&mpsc::Sender<MSG>>,
     ) -> Result<Literal, ErrorInfo> {
-        let usage = "join(separator: string) => string";
-
-        if args.len() != 1 {
-            return Err(gen_error_info(
-                Position::new(interval, &data.context.flow),
-                format!("usage: {}", usage),
-            ));
-        }
-
-        let separator = match args.get("arg0") {
-            Some(res) if res.primitive.get_type() == PrimitiveType::PrimitiveString => {
-                Literal::get_value::<String>(
-                    &res.primitive,
-                    &data.context.flow,
-                    interval,
-                    ERROR_ARRAY_JOIN.to_owned(),
-                )?
-            }
-            _ => {
-                return Err(gen_error_info(
-                    Position::new(interval, &data.context.flow),
-                    ERROR_ARRAY_JOIN.to_owned(),
-                ));
-            }
-        };
+        let [separator] = get_string_args(
+            &args,
+            data,
+            interval,
+            ERROR_ARRAY_JOIN,
+            "join(separator: string) => string",
+        )?;
 
         let length = array.value.len();
         let mut result = String::new();
@@ -488,114 +358,97 @@ impl PrimitiveArray {
         Ok(PrimitiveString::get_literal(&result, interval))
     }
 
+    #[allow(clippy::needless_pass_by_value)]
     fn length(
-        array: &mut PrimitiveArray,
-        args: &HashMap<String, Literal>,
-        _additional_info: &Option<HashMap<String, Literal>>,
+        array: &mut Self,
+        args: HashMap<String, Literal>,
+        _additional_info: Option<&HashMap<String, Literal>>,
         interval: Interval,
         data: &mut Data,
         _msg_data: &mut MessageData,
-        _sender: &Option<mpsc::Sender<MSG>>,
+        _sender: Option<&mpsc::Sender<MSG>>,
     ) -> Result<Literal, ErrorInfo> {
-        let usage = "length() => int";
-
-        if !args.is_empty() {
-            return Err(gen_error_info(
-                Position::new(interval, &data.context.flow),
-                format!("usage: {}", usage),
-            ));
-        }
+        require_n_args(0, &args, interval, data, "length() => int")?;
 
         let result = array.value.len();
 
-        Ok(PrimitiveInt::get_literal(result as i64, interval))
+        Ok(PrimitiveInt::get_literal(
+            result.to_i64().ok_or_else(|| {
+                gen_error_info(
+                    Position::new(interval, &data.context.flow),
+                    OVERFLOWING_OPERATION.to_owned(),
+                )
+            })?,
+            interval,
+        ))
     }
 
+    #[allow(clippy::needless_pass_by_value)]
     fn one_of(
-        array: &mut PrimitiveArray,
-        args: &HashMap<String, Literal>,
-        _additional_info: &Option<HashMap<String, Literal>>,
+        array: &mut Self,
+        args: HashMap<String, Literal>,
+        _additional_info: Option<&HashMap<String, Literal>>,
         interval: Interval,
         data: &mut Data,
         _msg_data: &mut MessageData,
-        _sender: &Option<mpsc::Sender<MSG>>,
+        _sender: Option<&mpsc::Sender<MSG>>,
     ) -> Result<Literal, ErrorInfo> {
-        let usage = "one_of() => primitive";
-
-        if !args.is_empty() {
-            return Err(gen_error_info(
-                Position::new(interval, &data.context.flow),
-                format!("usage: {}", usage),
-            ));
-        }
+        require_n_args(0, &args, interval, data, "one_of() => primitive")?;
 
         if let Some(res) = array
             .value
-            .get(rand::thread_rng().gen_range(0..array.value.len()))
+            .get(rand::rng().random_range(0..array.value.len()))
         {
-            return Ok(res.to_owned());
+            return Ok(res.clone());
         }
 
         Ok(PrimitiveNull::get_literal(interval))
     }
 
+    #[allow(clippy::needless_pass_by_value)]
     fn push(
-        array: &mut PrimitiveArray,
-        args: &HashMap<String, Literal>,
-        _additional_info: &Option<HashMap<String, Literal>>,
+        array: &mut Self,
+        mut args: HashMap<String, Literal>,
+        _additional_info: Option<&HashMap<String, Literal>>,
         interval: Interval,
         data: &mut Data,
         _msg_data: &mut MessageData,
-        _sender: &Option<mpsc::Sender<MSG>>,
+        _sender: Option<&mpsc::Sender<MSG>>,
     ) -> Result<Literal, ErrorInfo> {
         let usage = "push(value: primitive) => null";
 
-        if args.len() != 1 {
-            return Err(gen_error_info(
-                Position::new(interval, &data.context.flow),
-                format!("usage: {}", usage),
-            ));
-        }
+        require_n_args(1, &args, interval, data, usage)?;
 
-        let value = match args.get("arg0") {
-            Some(res) => res,
-            None => {
-                return Err(gen_error_info(
-                    Position::new(interval, &data.context.flow),
-                    format!("usage: {}", usage),
-                ));
-            }
-        };
-
-        if array.value.len() + args.len() == usize::MAX {
+        if array.value.len() == usize::MAX {
             return Err(gen_error_info(
                 Position::new(interval, &data.context.flow),
                 format!("{} {}", ERROR_ARRAY_OVERFLOW, usize::MAX,),
             ));
         }
 
-        array.value.push(value.to_owned());
+        let Some(value) = args.remove(arg_name!(0)) else {
+            return Err(gen_error_info(
+                Position::new(interval, &data.context.flow),
+                format!("usage: {usage}"),
+            ));
+        };
+
+        array.value.push(value);
 
         Ok(PrimitiveNull::get_literal(interval))
     }
 
+    #[allow(clippy::needless_pass_by_value)]
     fn pop(
-        array: &mut PrimitiveArray,
-        args: &HashMap<String, Literal>,
-        _additional_info: &Option<HashMap<String, Literal>>,
+        array: &mut Self,
+        args: HashMap<String, Literal>,
+        _additional_info: Option<&HashMap<String, Literal>>,
         interval: Interval,
         data: &mut Data,
         _msg_data: &mut MessageData,
-        _sender: &Option<mpsc::Sender<MSG>>,
+        _sender: Option<&mpsc::Sender<MSG>>,
     ) -> Result<Literal, ErrorInfo> {
-        let usage = "pop() => primitive";
-
-        if !args.is_empty() {
-            return Err(gen_error_info(
-                Position::new(interval, &data.context.flow),
-                format!("usage: {}", usage),
-            ));
-        }
+        require_n_args(0, &args, interval, data, "pop() => primitive")?;
 
         match array.value.pop() {
             Some(literal) => Ok(literal),
@@ -606,237 +459,113 @@ impl PrimitiveArray {
         }
     }
 
+    #[allow(clippy::needless_pass_by_value)]
     fn remove_at(
-        array: &mut PrimitiveArray,
-        args: &HashMap<String, Literal>,
-        _additional_info: &Option<HashMap<String, Literal>>,
+        array: &mut Self,
+        args: HashMap<String, Literal>,
+        _additional_info: Option<&HashMap<String, Literal>>,
         interval: Interval,
         data: &mut Data,
         _msg_data: &mut MessageData,
-        _sender: &Option<mpsc::Sender<MSG>>,
+        _sender: Option<&mpsc::Sender<MSG>>,
     ) -> Result<Literal, ErrorInfo> {
-        let usage = "remove_at(index: int) => primitive";
-
-        if args.len() != 1 {
-            return Err(gen_error_info(
-                Position::new(interval, &data.context.flow),
-                format!("usage: {}", usage),
-            ));
-        }
-
-        let index = match args.get("arg0") {
-            Some(res) if res.primitive.get_type() == PrimitiveType::PrimitiveInt => {
-                Literal::get_value::<i64>(
-                    &res.primitive,
-                    &data.context.flow,
-                    interval,
-                    ERROR_ARRAY_REMOVE_AT.to_owned(),
-                )?
-            }
-            _ => {
-                return Err(gen_error_info(
-                    Position::new(interval, &data.context.flow),
-                    ERROR_ARRAY_REMOVE_AT.to_owned(),
-                ));
-            }
-        };
-
-        check_index(
-            *index,
-            array.value.len() as i64,
-            &data.context.flow,
+        let [index] = get_int_args(
+            &args,
+            data,
             interval,
+            ERROR_ARRAY_REMOVE_AT,
+            "remove_at(index: int) => primitive",
         )?;
 
-        Ok(array.value.remove(*index as usize))
+        let index = cast_to_index(index, array.value.len(), data, interval)?;
+
+        Ok(array.value.remove(index))
     }
 
+    #[allow(clippy::needless_pass_by_value)]
     fn shuffle(
-        array: &mut PrimitiveArray,
-        args: &HashMap<String, Literal>,
-        _additional_info: &Option<HashMap<String, Literal>>,
+        array: &mut Self,
+        args: HashMap<String, Literal>,
+        _additional_info: Option<&HashMap<String, Literal>>,
         interval: Interval,
         data: &mut Data,
         _msg_data: &mut MessageData,
-        _sender: &Option<mpsc::Sender<MSG>>,
+        _sender: Option<&mpsc::Sender<MSG>>,
     ) -> Result<Literal, ErrorInfo> {
-        let usage = "shuffle() => array";
+        require_n_args(0, &args, interval, data, "shuffle() => array")?;
 
-        if !args.is_empty() {
-            return Err(gen_error_info(
-                Position::new(interval, &data.context.flow),
-                format!("usage: {}", usage),
-            ));
-        }
+        let mut vector = array.value.clone();
 
-        let mut vector = array.value.to_owned();
+        vector.shuffle(&mut rand::rng());
 
-        vector.shuffle(&mut rand::thread_rng());
-
-        Ok(PrimitiveArray::get_literal(&vector, interval))
+        Ok(Self::get_literal(vector, interval))
     }
 
+    #[allow(clippy::needless_pass_by_value)]
     fn slice(
-        array: &mut PrimitiveArray,
-        args: &HashMap<String, Literal>,
-        _additional_info: &Option<HashMap<String, Literal>>,
+        array: &mut Self,
+        args: HashMap<String, Literal>,
+        _additional_info: Option<&HashMap<String, Literal>>,
         interval: Interval,
         data: &mut Data,
         _msg_data: &mut MessageData,
-        _sender: &Option<mpsc::Sender<MSG>>,
+        _sender: Option<&mpsc::Sender<MSG>>,
     ) -> Result<Literal, ErrorInfo> {
         let usage = "slice(start: Integer, end: Optional<Integer>) => [Literal]";
-        let len = array.value.len();
 
-        match args.len() {
-            1 => match args.get("arg0") {
-                Some(literal) => {
-                    let mut int_start = Literal::get_value::<i64>(
-                        &literal.primitive,
-                        &data.context.flow,
-                        literal.interval,
-                        ERROR_SLICE_ARG_INT.to_owned(),
-                    )?
-                    .to_owned();
+        let (start_index, end_index) =
+            get_index_args(array.value.len(), &args, interval, data, usage)?;
 
-                    if int_start < 0 {
-                        int_start += len as i64;
-                    }
+        let value = array.value[start_index..end_index].to_vec();
 
-                    let start = match int_start {
-                        value if value >= 0 && (value as usize) < len => value as usize,
-                        _ => {
-                            return Err(gen_error_info(
-                                Position::new(interval, &data.context.flow),
-                                ERROR_SLICE_ARG_LEN.to_owned(),
-                            ))
-                        }
-                    };
-
-                    let value = array.value[start..].to_vec();
-
-                    Ok(PrimitiveArray::get_literal(&value, interval))
-                }
-                _ => Err(gen_error_info(
-                    Position::new(interval, &data.context.flow),
-                    ERROR_SLICE_ARG_INT.to_owned(),
-                )),
-            },
-            2 => match (args.get("arg0"), args.get("arg1")) {
-                (Some(literal_start), Some(literal_end)) => {
-                    let mut int_start = Literal::get_value::<i64>(
-                        &literal_start.primitive,
-                        &data.context.flow,
-                        literal_start.interval,
-                        ERROR_SLICE_ARG_INT.to_owned(),
-                    )?
-                    .to_owned();
-                    let mut int_end = Literal::get_value::<i64>(
-                        &literal_end.primitive,
-                        &data.context.flow,
-                        literal_end.interval,
-                        ERROR_SLICE_ARG_INT.to_owned(),
-                    )?
-                    .to_owned();
-
-                    if int_start < 0 {
-                        int_start += len as i64;
-                    }
-
-                    if int_end.is_negative() {
-                        int_end += len as i64;
-                    }
-                    if int_end < int_start {
-                        return Err(gen_error_info(
-                            Position::new(interval, &data.context.flow),
-                            ERROR_SLICE_ARG2.to_owned(),
-                        ));
-                    }
-
-                    let (start, end) = match (int_start, int_end) {
-                        (start, end)
-                            if int_start >= 0
-                                && end >= 0
-                                && (start as usize) < len
-                                && (end as usize) <= len =>
-                        {
-                            (start as usize, end as usize)
-                        }
-                        _ => {
-                            return Err(gen_error_info(
-                                Position::new(interval, &data.context.flow),
-                                ERROR_SLICE_ARG_LEN.to_owned(),
-                            ))
-                        }
-                    };
-                    let value = array.value[start..end].to_vec();
-
-                    Ok(PrimitiveArray::get_literal(&value, interval))
-                }
-                _ => Err(gen_error_info(
-                    Position::new(interval, &data.context.flow),
-                    ERROR_SLICE_ARG_INT.to_owned(),
-                )),
-            },
-            _ => Err(gen_error_info(
-                Position::new(interval, &data.context.flow),
-                format!("usage: {}", usage),
-            )),
-        }
+        Ok(Self::get_literal(value, interval))
     }
 
+    #[allow(clippy::needless_pass_by_value)]
     fn reverse(
-        array: &mut PrimitiveArray,
-        args: &HashMap<String, Literal>,
-        _additional_info: &Option<HashMap<String, Literal>>,
+        array: &mut Self,
+        args: HashMap<String, Literal>,
+        _additional_info: Option<&HashMap<String, Literal>>,
         interval: Interval,
         data: &mut Data,
         _msg_data: &mut MessageData,
-        _sender: &Option<mpsc::Sender<MSG>>,
+        _sender: Option<&mpsc::Sender<MSG>>,
     ) -> Result<Literal, ErrorInfo> {
-        let usage = "reverse() => [Literal]";
+        require_n_args(0, &args, interval, data, "reverse() => [Literal]")?;
 
-        if !args.is_empty() {
-            return Err(gen_error_info(
-                Position::new(interval, &data.context.flow),
-                format!("usage: {}", usage),
-            ));
-        }
+        let reversed_list = array.value.iter().rev().cloned().collect();
 
-        let mut reversed_list = array.value.clone();
-        reversed_list.reverse();
-
-        Ok(PrimitiveArray::get_literal(&reversed_list, interval))
+        Ok(Self::get_literal(reversed_list, interval))
     }
 
+    #[allow(clippy::needless_pass_by_value)]
     fn append(
-        array: &mut PrimitiveArray,
-        args: &HashMap<String, Literal>,
-        _additional_info: &Option<HashMap<String, Literal>>,
+        array: &mut Self,
+        args: HashMap<String, Literal>,
+        _additional_info: Option<&HashMap<String, Literal>>,
         interval: Interval,
         data: &mut Data,
         _msg_data: &mut MessageData,
-        _sender: &Option<mpsc::Sender<MSG>>,
+        _sender: Option<&mpsc::Sender<MSG>>,
     ) -> Result<Literal, ErrorInfo> {
-        let usage = "append(other_array: [Literal]) => [Literal]";
+        require_n_args(
+            1,
+            &args,
+            interval,
+            data,
+            "append(other_array: [Literal]) => [Literal]",
+        )?;
 
-        if args.len() != 1 {
-            return Err(gen_error_info(
-                Position::new(interval, &data.context.flow),
-                format!("usage: {}", usage),
-            ));
-        }
-
-        let mut other_array: Vec<Literal> = match args.get("arg0") {
+        let mut other_array: Vec<Literal> = match args.get(arg_name!(0)) {
             Some(res) if res.content_type == "array" => {
-                let value = Literal::get_value::<Vec<Literal>>(
+                let value = Literal::get_value::<Vec<Literal>, _>(
                     &res.primitive,
                     &data.context.flow,
                     interval,
-                    ERROR_ARRAY_INSERT_AT.to_owned(),
+                    ERROR_ARRAY_INSERT_AT,
                 )?;
 
-                (*value).clone().to_vec()
+                (*value).clone().clone()
             }
             _ => {
                 return Err(gen_error_info(
@@ -850,223 +579,204 @@ impl PrimitiveArray {
 
         new_array.append(&mut other_array);
 
-        Ok(PrimitiveArray::get_literal(&new_array, interval))
+        Ok(Self::get_literal(new_array, interval))
     }
 
+    #[allow(clippy::needless_pass_by_value)]
     fn flatten(
-        array: &mut PrimitiveArray,
-        args: &HashMap<String, Literal>,
-        _additional_info: &Option<HashMap<String, Literal>>,
+        array: &mut Self,
+        args: HashMap<String, Literal>,
+        _additional_info: Option<&HashMap<String, Literal>>,
         interval: Interval,
         data: &mut Data,
         _msg_data: &mut MessageData,
-        _sender: &Option<mpsc::Sender<MSG>>,
+        _sender: Option<&mpsc::Sender<MSG>>,
     ) -> Result<Literal, ErrorInfo> {
-        let usage = "flatten() => [Literal]";
-
-        if !args.is_empty() {
-            return Err(gen_error_info(
-                Position::new(interval, &data.context.flow),
-                format!("usage: {}", usage),
-            ));
-        }
+        require_n_args(0, &args, interval, data, "flatten() => [Literal]")?;
 
         let mut new_array = vec![];
 
-        for lit in array.value.iter() {
+        for lit in &array.value {
             if lit.content_type == "array" {
-                let value = Literal::get_value::<Vec<Literal>>(
+                let value = Literal::get_value::<Vec<Literal>, _>(
                     &lit.primitive,
                     &data.context.flow,
                     interval,
-                    ERROR_ARRAY_INSERT_AT.to_owned(),
+                    ERROR_ARRAY_INSERT_AT,
                 )?;
-                for elem in value.iter() {
-                    new_array.push(elem.to_owned())
+                for elem in value {
+                    new_array.push(elem.clone());
                 }
             } else {
-                new_array.push(lit.to_owned())
+                new_array.push(lit.clone());
             }
         }
 
-        Ok(PrimitiveArray::get_literal(&new_array, interval))
+        Ok(Self::get_literal(new_array, interval))
     }
 }
 
 impl PrimitiveArray {
+    #[allow(clippy::needless_pass_by_value)]
     fn map(
-        array: &mut PrimitiveArray,
-        args: &HashMap<String, Literal>,
-        _additional_info: &Option<HashMap<String, Literal>>,
+        array: &mut Self,
+        args: HashMap<String, Literal>,
+        _additional_info: Option<&HashMap<String, Literal>>,
         interval: Interval,
         data: &mut Data,
         msg_data: &mut MessageData,
-        sender: &Option<mpsc::Sender<MSG>>,
+        sender: Option<&mpsc::Sender<MSG>>,
     ) -> Result<Literal, ErrorInfo> {
         let usage = "map(fn) expect one argument of type [Closure]";
 
-        match args.get("arg0") {
-            Some(lit) => {
-                let closure: &PrimitiveClosure = Literal::get_value::<PrimitiveClosure>(
-                    &lit.primitive,
-                    &data.context.flow,
-                    interval,
-                    format!("usage: {}", usage),
-                )?;
+        let [closure]: [&PrimitiveClosure; 1] =
+            get_args(&args, data, interval, format!("usage: {usage}"), usage)?;
 
-                let mut vec = vec![];
-                let mut context = init_child_context(data);
-                let mut step_count = *data.step_count;
-                let mut new_scope_data = init_child_scope(data, &mut context, &mut step_count);
+        let mut vec = vec![];
+        let mut context = init_child_context(data);
+        let mut step_count = *data.step_count;
+        let mut new_scope_data = init_child_scope(data, &mut context, &mut step_count);
 
-                if let Some(memories) = closure.enclosed_variables.clone() {
-                    insert_memories_in_scope_memory(
-                        &mut new_scope_data,
-                        memories,
-                        msg_data,
-                        sender,
-                    );
-                }
-
-                for (index, value) in array.value.iter().enumerate() {
-                    let mut map = HashMap::new();
-                    map.insert("arg0".to_owned(), value.to_owned());
-                    if closure.args.len() >= 2 {
-                        map.insert(
-                            "arg1".to_owned(),
-                            PrimitiveInt::get_literal(index as i64, interval),
-                        );
-                    }
-
-                    let args = ArgsType::Normal(map);
-                    insert_args_in_scope_memory(
-                        &mut new_scope_data,
-                        &closure.args,
-                        &args,
-                        msg_data,
-                        sender,
-                    );
-
-                    let result = exec_closure(
-                        &closure.func,
-                        &closure.args,
-                        args,
-                        interval,
-                        &mut new_scope_data,
-                        msg_data,
-                        sender,
-                    )?;
-                    vec.push(result);
-                }
-
-                Ok(PrimitiveArray::get_literal(&vec, interval))
-            }
-            None => Err(gen_error_info(
-                Position::new(interval, &data.context.flow),
-                format!("usage: {}", usage),
-            )),
+        if let Some(memories) = &closure.enclosed_variables {
+            insert_memories_in_scope_memory(&mut new_scope_data, memories, msg_data, sender);
         }
+
+        for (index, value) in array.value.iter().enumerate() {
+            let mut map = HashMap::new();
+            map.insert(arg_name!(0).to_owned(), value.clone());
+            if closure.args.len() >= 2 {
+                map.insert(
+                    arg_name!(1).to_owned(),
+                    PrimitiveInt::get_literal(
+                        index.to_i64().ok_or_else(|| {
+                            gen_error_info(
+                                Position::new(interval, &data.context.flow),
+                                OVERFLOWING_OPERATION.to_owned(),
+                            )
+                        })?,
+                        interval,
+                    ),
+                );
+            }
+
+            let args = ArgsType::Normal(map);
+            insert_args_in_scope_memory(
+                &mut new_scope_data,
+                &closure.args,
+                &args,
+                msg_data,
+                sender,
+            );
+
+            let result = exec_closure(
+                &closure.func,
+                &closure.args,
+                &args,
+                interval,
+                &mut new_scope_data,
+                msg_data,
+                sender,
+            )?;
+            vec.push(result);
+        }
+
+        Ok(Self::get_literal(vec, interval))
     }
 
+    #[allow(clippy::needless_pass_by_value)]
     fn filter(
-        array: &mut PrimitiveArray,
-        args: &HashMap<String, Literal>,
-        _additional_info: &Option<HashMap<String, Literal>>,
+        array: &mut Self,
+        args: HashMap<String, Literal>,
+        _additional_info: Option<&HashMap<String, Literal>>,
         interval: Interval,
         data: &mut Data,
         msg_data: &mut MessageData,
-        sender: &Option<mpsc::Sender<MSG>>,
+        sender: Option<&mpsc::Sender<MSG>>,
     ) -> Result<Literal, ErrorInfo> {
         let usage = "filter(fn) expect one argument of type [Closure]";
 
-        match args.get("arg0") {
-            Some(lit) => {
-                let closure: &PrimitiveClosure = Literal::get_value::<PrimitiveClosure>(
-                    &lit.primitive,
-                    &data.context.flow,
-                    interval,
-                    format!("usage: {}", usage),
-                )?;
+        let [closure]: [&PrimitiveClosure; 1] =
+            get_args(&args, data, interval, format!("usage: {usage}"), usage)?;
 
-                let mut vec = vec![];
+        let mut vec = vec![];
 
-                let mut context = init_child_context(data);
-                let mut step_count = *data.step_count;
-                let mut new_scope_data = init_child_scope(data, &mut context, &mut step_count);
+        let mut context = init_child_context(data);
+        let mut step_count = *data.step_count;
+        let mut new_scope_data = init_child_scope(data, &mut context, &mut step_count);
 
-                if let Some(memories) = closure.enclosed_variables.clone() {
-                    insert_memories_in_scope_memory(
-                        &mut new_scope_data,
-                        memories,
-                        msg_data,
-                        sender,
-                    );
-                }
-
-                for (index, value) in array.value.iter().enumerate() {
-                    let mut map = HashMap::new();
-                    map.insert("arg0".to_owned(), value.to_owned());
-                    if closure.args.len() >= 2 {
-                        map.insert(
-                            "arg1".to_owned(),
-                            PrimitiveInt::get_literal(index as i64, interval),
-                        );
-                    }
-
-                    let args = ArgsType::Normal(map);
-
-                    insert_args_in_scope_memory(
-                        &mut new_scope_data,
-                        &closure.args,
-                        &args,
-                        msg_data,
-                        sender,
-                    );
-
-                    let result = exec_closure(
-                        &closure.func,
-                        &closure.args,
-                        args,
-                        interval,
-                        &mut new_scope_data,
-                        msg_data,
-                        sender,
-                    )?;
-
-                    if result.primitive.as_bool() {
-                        vec.push(value.clone());
-                    }
-                }
-
-                Ok(PrimitiveArray::get_literal(&vec, interval))
-            }
-            None => Err(gen_error_info(
-                Position::new(interval, &data.context.flow),
-                format!("usage: {}", usage),
-            )),
+        if let Some(memories) = &closure.enclosed_variables {
+            insert_memories_in_scope_memory(&mut new_scope_data, memories, msg_data, sender);
         }
+
+        for (index, value) in array.value.iter().enumerate() {
+            let mut map = HashMap::new();
+            map.insert(arg_name!(0).to_owned(), value.clone());
+            if closure.args.len() >= 2 {
+                map.insert(
+                    arg_name!(1).to_owned(),
+                    PrimitiveInt::get_literal(
+                        index.to_i64().ok_or_else(|| {
+                            gen_error_info(
+                                Position::new(interval, &data.context.flow),
+                                OVERFLOWING_OPERATION.to_owned(),
+                            )
+                        })?,
+                        interval,
+                    ),
+                );
+            }
+
+            let args = ArgsType::Normal(map);
+
+            insert_args_in_scope_memory(
+                &mut new_scope_data,
+                &closure.args,
+                &args,
+                msg_data,
+                sender,
+            );
+
+            let result = exec_closure(
+                &closure.func,
+                &closure.args,
+                &args,
+                interval,
+                &mut new_scope_data,
+                msg_data,
+                sender,
+            )?;
+
+            if result.primitive.as_bool() {
+                vec.push(value.clone());
+            }
+        }
+
+        Ok(Self::get_literal(vec, interval))
     }
 
+    #[allow(clippy::needless_pass_by_value)]
     fn reduce(
-        array: &mut PrimitiveArray,
-        args: &HashMap<String, Literal>,
-        _additional_info: &Option<HashMap<String, Literal>>,
+        array: &mut Self,
+        args: HashMap<String, Literal>,
+        _additional_info: Option<&HashMap<String, Literal>>,
         interval: Interval,
         data: &mut Data,
         msg_data: &mut MessageData,
-        sender: &Option<mpsc::Sender<MSG>>,
+        sender: Option<&mpsc::Sender<MSG>>,
     ) -> Result<Literal, ErrorInfo> {
         let usage = "reduce(acc, fn) expect tow arguments an initial value and 'Closure' with two arguments: an 'accumulator', and an element";
 
-        match (args.get("arg0"), args.get("arg1")) {
+        require_n_args(2, &args, interval, data, usage)?;
+
+        match (args.get(arg_name!(0)), args.get(arg_name!(1))) {
             (Some(acc), Some(closure)) => {
                 let mut accumulator = acc.clone();
 
-                let closure: &PrimitiveClosure = Literal::get_value::<PrimitiveClosure>(
+                let closure: &PrimitiveClosure = Literal::get_value::<PrimitiveClosure, _>(
                     &closure.primitive,
                     &data.context.flow,
                     interval,
-                    format!("usage: {}", usage),
+                    format!("usage: {usage}"),
                 )?;
 
                 let mut context = init_child_context(data);
@@ -1075,13 +785,21 @@ impl PrimitiveArray {
 
                 for (index, value) in array.value.iter().enumerate() {
                     let mut map = HashMap::new();
-                    map.insert("arg0".to_owned(), accumulator);
-                    map.insert("arg1".to_owned(), value.to_owned());
+                    map.insert(arg_name!(0).to_owned(), accumulator);
+                    map.insert(arg_name!(1).to_owned(), value.clone());
 
                     if closure.args.len() >= 2 {
                         map.insert(
                             "arg2".to_owned(),
-                            PrimitiveInt::get_literal(index as i64, interval),
+                            PrimitiveInt::get_literal(
+                                index.to_i64().ok_or_else(|| {
+                                    gen_error_info(
+                                        Position::new(interval, &data.context.flow),
+                                        OVERFLOWING_OPERATION.to_owned(),
+                                    )
+                                })?,
+                                interval,
+                            ),
                         );
                     }
 
@@ -1098,7 +816,7 @@ impl PrimitiveArray {
                     accumulator = exec_closure(
                         &closure.func,
                         &closure.args,
-                        args,
+                        &args,
                         interval,
                         &mut new_scope_data,
                         msg_data,
@@ -1110,7 +828,7 @@ impl PrimitiveArray {
             }
             _ => Err(gen_error_info(
                 Position::new(interval, &data.context.flow),
-                format!("usage: {}", usage),
+                format!("usage: {usage}"),
             )),
         }
     }
@@ -1121,14 +839,14 @@ impl PrimitiveArray {
 ////////////////////////////////////////////////////////////////////////////////
 
 impl PrimitiveArray {
-    pub fn new(value: &[Literal]) -> Self {
-        Self {
-            value: value.to_owned(),
-        }
+    #[must_use]
+    pub fn new(value: Vec<Literal>) -> Self {
+        Self { value }
     }
 
-    pub fn get_literal(vector: &[Literal], interval: Interval) -> Literal {
-        let primitive = Box::new(PrimitiveArray::new(vector));
+    #[must_use]
+    pub fn get_literal(vector: Vec<Literal>, interval: Interval) -> Literal {
+        let primitive = Box::new(Self::new(vector));
 
         Literal {
             content_type: "array".to_owned(),
@@ -1146,73 +864,24 @@ impl PrimitiveArray {
 
 #[typetag::serde]
 impl Primitive for PrimitiveArray {
-    fn is_eq(&self, other: &dyn Primitive) -> bool {
-        if let Some(other) = other.as_any().downcast_ref::<Self>() {
-            return self.value == other.value;
-        }
+    impl_basic_cmp!();
 
-        false
-    }
-
-    fn is_cmp(&self, other: &dyn Primitive) -> Option<Ordering> {
-        if let Some(other) = other.as_any().downcast_ref::<Self>() {
-            return self.value.partial_cmp(&other.value);
-        }
-
-        None
-    }
-
-    fn do_add(&self, other: &dyn Primitive) -> Result<Box<dyn Primitive>, String> {
-        Err(format!(
-            "{} {:?} + {:?}",
-            ERROR_ILLEGAL_OPERATION,
-            self.get_type(),
-            other.get_type()
-        ))
-    }
-
-    fn do_sub(&self, other: &dyn Primitive) -> Result<Box<dyn Primitive>, String> {
-        Err(format!(
-            "{} {:?} - {:?}",
-            ERROR_ILLEGAL_OPERATION,
-            self.get_type(),
-            other.get_type()
-        ))
-    }
-
-    fn do_div(&self, other: &dyn Primitive) -> Result<Box<dyn Primitive>, String> {
-        Err(format!(
-            "{} {:?} / {:?}",
-            ERROR_ILLEGAL_OPERATION,
-            self.get_type(),
-            other.get_type()
-        ))
-    }
-
-    fn do_mul(&self, other: &dyn Primitive) -> Result<Box<dyn Primitive>, String> {
-        Err(format!(
-            "{} {:?} * {:?}",
-            ERROR_ILLEGAL_OPERATION,
-            self.get_type(),
-            other.get_type()
-        ))
-    }
-
-    fn do_rem(&self, other: &dyn Primitive) -> Result<Box<dyn Primitive>, String> {
-        Err(format!(
-            "{} {:?} % {:?}",
-            ERROR_ILLEGAL_OPERATION,
-            self.get_type(),
-            other.get_type()
-        ))
-    }
+    illegal_math_ops!();
 
     fn as_debug(&self) -> &dyn std::fmt::Debug {
         self
     }
 
-    fn as_any(&self) -> &dyn std::any::Any {
+    fn as_any(&self) -> &dyn Any {
         self
+    }
+
+    fn into_any(self: Box<Self>) -> Box<dyn Any> {
+        self
+    }
+
+    fn into_value(self: Box<Self>) -> Box<dyn Any> {
+        Box::new(self.value)
     }
 
     fn get_type(&self) -> PrimitiveType {
@@ -1226,20 +895,17 @@ impl Primitive for PrimitiveArray {
     fn to_json(&self) -> serde_json::Value {
         let mut vector: Vec<serde_json::Value> = Vec::new();
 
-        for literal in self.value.iter() {
+        for literal in &self.value {
             let value = literal.primitive.to_json();
 
-            if !TYPES.contains(&&(*literal.content_type)) {
+            if TYPES.contains(&&(*literal.content_type)) {
+                vector.push(value);
+            } else {
                 let mut map = serde_json::Map::new();
-                map.insert(
-                    "content_type".to_owned(),
-                    serde_json::json!(literal.content_type),
-                );
+                map.insert("content_type".to_owned(), json!(literal.content_type));
                 map.insert("content".to_owned(), value);
 
-                vector.push(serde_json::json!(map));
-            } else {
-                vector.push(value);
+                vector.push(json!(map));
             }
         }
 
@@ -1249,7 +915,7 @@ impl Primitive for PrimitiveArray {
     fn format_mem(&self, _content_type: &str, first: bool) -> serde_json::Value {
         let mut vector: Vec<serde_json::Value> = Vec::new();
 
-        for literal in self.value.iter() {
+        for literal in &self.value {
             let content_type = &literal.content_type;
             let value = literal.primitive.format_mem(content_type, first);
             vector.push(value);
@@ -1266,11 +932,11 @@ impl Primitive for PrimitiveArray {
         true
     }
 
-    fn get_value(&self) -> &dyn std::any::Any {
+    fn get_value(&self) -> &dyn Any {
         &self.value
     }
 
-    fn get_mut_value(&mut self) -> &mut dyn std::any::Any {
+    fn get_mut_value(&mut self) -> &mut dyn Any {
         &mut self.value
     }
 
@@ -1288,14 +954,14 @@ impl Primitive for PrimitiveArray {
     fn do_exec(
         &mut self,
         name: &str,
-        args: &HashMap<String, Literal>,
+        args: HashMap<String, Literal>,
         mem_type: &MemoryType,
-        additional_info: &Option<HashMap<String, Literal>>,
+        additional_info: Option<&HashMap<String, Literal>>,
         interval: Interval,
         _content_type: &ContentType,
         data: &mut Data,
         msg_data: &mut MessageData,
-        sender: &Option<mpsc::Sender<MSG>>,
+        sender: Option<&mpsc::Sender<MSG>>,
     ) -> Result<(Literal, Right), ErrorInfo> {
         if let Some((f, right)) = FUNCTIONS.get(name) {
             if *mem_type == MemoryType::Constant && *right == Right::Write {
@@ -1303,24 +969,23 @@ impl Primitive for PrimitiveArray {
                     Position::new(interval, &data.context.flow),
                     ERROR_CONSTANT_MUTABLE_FUNCTION.to_string(),
                 ));
-            } else {
-                let res = f(
-                    self,
-                    args,
-                    additional_info,
-                    interval,
-                    data,
-                    msg_data,
-                    sender,
-                )?;
-
-                return Ok((res, *right));
             }
+            let res = f(
+                self,
+                args,
+                additional_info,
+                interval,
+                data,
+                msg_data,
+                sender,
+            )?;
+
+            return Ok((res, *right));
         }
 
         Err(gen_error_info(
             Position::new(interval, &data.context.flow),
-            format!("[{}] {}", name, ERROR_ARRAY_UNKNOWN_METHOD),
+            format!("[{name}] {ERROR_ARRAY_UNKNOWN_METHOD}"),
         ))
     }
 }

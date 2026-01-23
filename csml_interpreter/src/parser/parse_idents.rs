@@ -1,6 +1,9 @@
-use crate::data::{ast::*, tokens::*};
+use crate::data::{
+    ast::{Expr, Identifier, Interval, ObjectType},
+    tokens::{AS, ASSIGNATION_RESERVED, Span, UTILISATION_RESERVED},
+};
 use crate::error_format::{
-    gen_nom_error, gen_nom_failure, ERROR_NUMBER_AS_IDENT, ERROR_RESERVED, ERROR_SIZE_IDENT,
+    ERROR_NUMBER_AS_IDENT, ERROR_RESERVED, ERROR_SIZE_IDENT, gen_nom_error, gen_nom_failure,
 };
 use crate::parser::{
     parse_comments::comment,
@@ -8,11 +11,11 @@ use crate::parser::{
     tools::{get_string, get_tag},
 };
 use nom::{
+    Err::Failure,
+    IResult, Parser,
     combinator::cut,
     error::{ContextError, ParseError},
     sequence::preceded,
-    Err::*,
-    IResult,
 };
 
 ////////////////////////////////////////////////////////////////////////////////
@@ -31,7 +34,7 @@ where
         return Err(gen_nom_error(s, ERROR_RESERVED));
     }
 
-    if var.len() > std::u8::MAX as usize {
+    if var.len() > u8::MAX as usize {
         return Err(gen_nom_failure(s, ERROR_SIZE_IDENT));
     }
 
@@ -46,7 +49,7 @@ fn validate_arg_string<'a, E>(s: Span<'a>, var: &str) -> IResult<Span<'a>, (), E
 where
     E: ParseError<Span<'a>> + ContextError<Span<'a>>,
 {
-    if var.len() > std::u8::MAX as usize {
+    if var.len() > u8::MAX as usize {
         return Err(gen_nom_failure(s, ERROR_SIZE_IDENT));
     }
 
@@ -96,46 +99,48 @@ pub fn parse_idents_usage<'a, E>(s: Span<'a>) -> IResult<Span<'a>, Identifier, E
 where
     E: ParseError<Span<'a>> + ContextError<Span<'a>>,
 {
-    let (s, position) = preceded(comment, get_interval)(s)?;
+    let (s, position) = preceded(comment, get_interval).parse(s)?;
     let (s, var) = parse_string_usage(s)?;
 
-    Ok((s, form_idents(var.to_owned(), position)))
+    Ok((s, form_idents(var.clone(), position)))
 }
 
 pub fn parse_idents_assignation<'a, E>(s: Span<'a>) -> IResult<Span<'a>, Identifier, E>
 where
     E: ParseError<Span<'a>> + ContextError<Span<'a>>,
 {
-    let (s, position) = preceded(comment, get_interval)(s)?;
+    let (s, position) = preceded(comment, get_interval).parse(s)?;
     let (s, var) = parse_string_assignation(s)?;
 
-    Ok((s, form_idents(var.to_owned(), position)))
+    Ok((s, form_idents(var.clone(), position)))
 }
 
 pub fn parse_arg_idents_assignation<'a, E>(s: Span<'a>) -> IResult<Span<'a>, Identifier, E>
 where
     E: ParseError<Span<'a>> + ContextError<Span<'a>>,
 {
-    let (s, position) = preceded(comment, get_interval)(s)?;
+    let (s, position) = preceded(comment, get_interval).parse(s)?;
     let (s, var) = parse_arg_string_assignation(s)?;
 
-    Ok((s, form_idents(var.to_owned(), position)))
+    Ok((s, form_idents(var.clone(), position)))
 }
 
 pub fn parse_idents_as<'a, E>(s: Span<'a>, expr: Expr) -> IResult<Span<'a>, Expr, E>
 where
     E: ParseError<Span<'a>> + ContextError<Span<'a>>,
 {
-    let arg: IResult<Span<'a>, String, E> = preceded(comment, get_string)(s);
+    let arg: IResult<Span<'a>, String, E> = preceded(comment, get_string).parse(s);
 
     match arg {
         Err(_) => Ok((s, expr)),
-        Ok((s2, tmp)) => match preceded(get_tag(tmp, AS), cut(parse_idents_assignation))(s2) {
-            Ok((s, name)) => Ok((s, Expr::ObjectExpr(ObjectType::As(name, Box::new(expr))))),
-            Err(err) => match err {
-                Failure(err) => Err(Failure(err)),
-                _ => Ok((s, expr)),
-            },
-        },
+        Ok((s2, tmp)) => {
+            match preceded(get_tag(tmp, AS), cut(parse_idents_assignation)).parse(s2) {
+                Ok((s, name)) => Ok((s, Expr::ObjectExpr(ObjectType::As(name, Box::new(expr))))),
+                Err(err) => match err {
+                    Failure(err) => Err(Failure(err)),
+                    _ => Ok((s, expr)),
+                },
+            }
+        }
     }
 }

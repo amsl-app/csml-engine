@@ -1,5 +1,9 @@
-use crate::data::{ast::*, tokens::*};
-use crate::parser::parse_braces::parse_r_brace;
+use crate::data::tokens::{LBrace, RBrace, Token};
+use crate::data::{
+    ast::{Block, InstructionInfo},
+    tokens::Span,
+};
+use crate::parser::parse_braces::parse_brace;
 use crate::parser::{
     parse_actions::parse_root_functions,
     parse_comments::comment,
@@ -7,14 +11,13 @@ use crate::parser::{
     tools::{get_interval, parse_error},
 };
 use nom::{
+    IResult, Parser,
     bytes::complete::tag,
     error::{ContextError, ParseError},
     multi::fold_many0,
     sequence::delimited,
     sequence::preceded,
-    *,
 };
-
 ////////////////////////////////////////////////////////////////////////////////
 // PUBLIC FUNCTIONS
 ////////////////////////////////////////////////////////////////////////////////
@@ -37,7 +40,8 @@ where
             acc.commands_count = index;
             acc
         },
-    )(s)
+    )
+    .parse(s)
 }
 
 pub fn parse_implicit_scope<'a, E>(s: Span<'a>) -> IResult<Span<'a>, Block, E>
@@ -63,9 +67,9 @@ where
         start,
         s,
         delimited(
-            preceded(comment, tag(L_BRACE)),
+            preceded(comment, tag(LBrace::TOKEN)),
             parse_root,
-            preceded(comment, parse_r_brace),
+            preceded(comment, parse_brace(RBrace)),
         ),
     )
 }

@@ -1,5 +1,5 @@
 
-CREATE TABLE cmsl_bot_versions (
+CREATE TABLE csml_bot_versions (
   id BINARY(128) PRIMARY KEY NOT NULL,
   bot_id VARCHAR NOT NULL,
 

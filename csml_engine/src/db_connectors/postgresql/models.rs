@@ -1,16 +1,23 @@
-use super::schema::*;
+use super::schema::{
+    csml_bot_versions, csml_conversations, csml_memories, csml_messages, csml_states,
+};
 use crate::data;
-use crate::data::EngineError;
+use crate::data::models::{ConversationStatus, Payload};
+use crate::data::{EngineError, SerializeCsmlBot};
 use crate::db_connectors::diesel::Direction;
 use crate::encrypt::decrypt_data;
+use crate::models::BotVersion;
 use chrono::NaiveDateTime;
 use csml_interpreter::data::Client;
 use diesel::{Associations, Identifiable, Insertable, Queryable};
+use num_traits::cast::ToPrimitive;
 use std::convert::TryFrom;
+use std::str::FromStr;
 use uuid::Uuid;
 
 #[derive(Identifiable, Queryable, PartialEq, Debug)]
-#[diesel(table_name = cmsl_bot_versions)]
+#[diesel(table_name = csml_bot_versions)]
+#[allow(clippy::struct_field_names)]
 pub struct Bot {
     pub id: Uuid,
 
@@ -22,8 +29,22 @@ pub struct Bot {
     pub created_at: NaiveDateTime,
 }
 
+impl TryFrom<Bot> for BotVersion {
+    type Error = EngineError;
+
+    fn try_from(version: Bot) -> Result<Self, Self::Error> {
+        let csml_bot: SerializeCsmlBot =
+            serde_json::from_str(&version.bot).map_err(EngineError::Serde)?;
+        Ok(Self {
+            bot: csml_bot.to_bot(),
+            version_id: version.id.to_string(),
+            engine_version: env!("CARGO_PKG_VERSION").to_owned(),
+        })
+    }
+}
+
 #[derive(Queryable, Insertable, Associations, PartialEq, Debug)]
-#[diesel(table_name = cmsl_bot_versions, belongs_to(Bot))]
+#[diesel(table_name = csml_bot_versions, belongs_to(Bot))]
 pub struct NewBot<'a> {
     pub id: Uuid,
     pub bot_id: &'a str,
@@ -62,7 +83,7 @@ impl From<Conversation> for data::models::Conversation {
             },
             flow_id: value.flow_id,
             step_id: value.step_id,
-            status: value.status,
+            status: ConversationStatus::from_str(&value.status).unwrap(),
             last_interaction_at: value.last_interaction_at.and_utc(),
             updated_at: value.updated_at.and_utc(),
             created_at: value.created_at.and_utc(),
@@ -116,8 +137,9 @@ pub struct NewMemory<'a> {
     pub expires_at: Option<NaiveDateTime>,
 }
 
-#[derive(Identifiable, Queryable, Associations, PartialEq, Debug)]
+#[derive(Identifiable, Queryable, Selectable, Associations, PartialEq, Debug)]
 #[diesel(table_name = csml_messages, belongs_to(Conversation))]
+#[allow(clippy::struct_field_names)]
 pub struct Message {
     pub id: Uuid,
     pub conversation_id: Uuid,
@@ -141,16 +163,33 @@ impl TryFrom<Message> for data::models::Message {
     type Error = EngineError;
 
     fn try_from(message: Message) -> Result<Self, Self::Error> {
+        let payload: Payload = serde_json::from_value(decrypt_data(message.payload)?)?;
+        if payload.content_type != message.content_type {
+            return Err(EngineError::Internal(format!(
+                "Message content_type {} does not match payload content_type {}",
+                message.content_type, payload.content_type
+            )));
+        }
+
         Ok(Self {
             id: message.id,
             conversation_id: message.conversation_id,
             flow_id: message.flow_id,
             step_id: message.step_id,
             direction: message.direction.into(),
-            payload: decrypt_data(message.payload)?,
-            content_type: message.content_type,
-            message_order: message.message_order as u32,
-            interaction_order: message.interaction_order as u32,
+            payload,
+            message_order: message.message_order.to_u32().ok_or_else(|| {
+                EngineError::Internal(format!(
+                    "can't convert message_order value ({}) to u32",
+                    message.message_order
+                ))
+            })?,
+            interaction_order: message.interaction_order.to_u32().ok_or_else(|| {
+                EngineError::Internal(format!(
+                    "can't convert interaction_order value ({}) to u32",
+                    message.interaction_order
+                ))
+            })?,
             updated_at: message.updated_at.and_utc(),
             created_at: message.created_at.and_utc(),
             expires_at: message.expires_at.as_ref().map(NaiveDateTime::and_utc),

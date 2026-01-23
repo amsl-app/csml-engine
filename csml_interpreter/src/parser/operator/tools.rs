@@ -1,21 +1,27 @@
-use crate::data::{ast::*, tokens::*};
+use crate::data::{
+    ast::{Infix, Prefix},
+    tokens::{
+        ADDITION, AND, DIVIDE, EQUAL, GREATER_THAN, GREATER_THAN_EQUAL, LESS_THAN, LESS_THAN_EQUAL,
+        MATCH, MULTIPLY, NOT, NOT_EQUAL, NOT_MATCH, OR, REMAINDER, SUBTRACTION, Span,
+    },
+};
 use nom::{
+    IResult, Parser,
     branch::alt,
     bytes::complete::tag,
     error::{ContextError, ParseError},
-    *,
 };
 
 ////////////////////////////////////////////////////////////////////////////////
 // PRIVATE FUNCTIONS
 ////////////////////////////////////////////////////////////////////////////////
 
-pub fn parse_not_operator<'a, E>(s: Span<'a>) -> IResult<Span<'a>, Pretfix, E>
+pub fn parse_not_operator<'a, E>(s: Span<'a>) -> IResult<Span<'a>, Prefix, E>
 where
     E: ParseError<Span<'a>> + ContextError<Span<'a>>,
 {
     let (rest, ..) = tag(NOT)(s)?;
-    Ok((rest, Pretfix::Not))
+    Ok((rest, Prefix::Not))
 }
 
 pub fn addition_operator<'a, E>(s: Span<'a>) -> IResult<Span<'a>, Infix, E>
@@ -146,14 +152,14 @@ pub fn parse_item_operator<'a, E>(s: Span<'a>) -> IResult<Span<'a>, Infix, E>
 where
     E: ParseError<Span<'a>> + ContextError<Span<'a>>,
 {
-    alt((subtraction_operator, addition_operator))(s)
+    alt((subtraction_operator, addition_operator)).parse(s)
 }
 
 pub fn parse_term_operator<'a, E>(s: Span<'a>) -> IResult<Span<'a>, Infix, E>
 where
     E: ParseError<Span<'a>> + ContextError<Span<'a>>,
 {
-    alt((divide_operator, multiply_operator, remainder_operator))(s)
+    alt((divide_operator, multiply_operator, remainder_operator)).parse(s)
 }
 
 pub fn parse_infix_operators<'a, E>(s: Span<'a>) -> IResult<Span<'a>, Infix, E>
@@ -169,5 +175,6 @@ where
         less_than_equal_operator,
         greater_than_operator,
         less_than_operator,
-    ))(s)
+    ))
+    .parse(s)
 }

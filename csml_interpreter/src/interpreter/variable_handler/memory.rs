@@ -1,7 +1,7 @@
 use crate::data::error_info::ErrorInfo;
 use crate::data::position::Position;
-use crate::data::{ast::Identifier, Data, Literal, Memory, MemoryType, MessageData, MSG};
-use crate::error_format::*;
+use crate::data::{Data, Literal, MSG, Memory, MemoryType, MessageData, ast::Identifier};
+use crate::error_format::{ERROR_FIND_MEMORY, gen_error_info};
 use std::sync::mpsc;
 
 pub fn search_in_memory_type(name: &Identifier, data: &Data) -> Result<String, ErrorInfo> {
@@ -21,7 +21,7 @@ pub fn search_in_memory_type(name: &Identifier, data: &Data) -> Result<String, E
 }
 
 pub fn search_var_memory<'a>(
-    name: Identifier,
+    name: &Identifier,
     data: &'a mut Data,
 ) -> Result<&'a mut Literal, ErrorInfo> {
     match data.context.current.get_mut(&name.ident) {
@@ -43,13 +43,13 @@ pub fn save_literal_in_mem(
     update: bool,
     data: &mut Data,
     msg_data: &mut MessageData,
-    sender: &Option<mpsc::Sender<MSG>>,
+    sender: Option<&mpsc::Sender<MSG>>,
 ) {
     match mem_type {
         MemoryType::Remember if update => {
             // save new value in current memory
-            msg_data.add_to_memory(&name, lit.clone());
-            // send new value to manager in order to be save in db
+            msg_data.add_to_memory(&name, &lit);
+            // send new value to manager to be safe in db
             MSG::send(
                 sender,
                 MSG::Remember(Memory::new(name.clone(), lit.clone())),

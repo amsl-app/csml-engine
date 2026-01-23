@@ -12,7 +12,7 @@ use serde_json::Value;
 #[test]
 fn ok_v1() {
     let msg = format_message(
-        Event::new("payload", "", serde_json::json!({})),
+        &Event::new("payload", "", serde_json::json!({})),
         Context::new(
             HashMap::new(),
             HashMap::new(),
@@ -37,7 +37,7 @@ fn ok_v1() {
 #[test]
 fn ok_v4() {
     let msg = format_message(
-        Event::new("payload", "", serde_json::json!({})),
+        &Event::new("payload", "", serde_json::json!({})),
         Context::new(
             HashMap::new(),
             HashMap::new(),
@@ -62,7 +62,7 @@ fn ok_v4() {
 #[test]
 fn ok_v4_no_arg() {
     let msg = format_message(
-        Event::new("payload", "", serde_json::json!({})),
+        &Event::new("payload", "", serde_json::json!({})),
         Context::new(
             HashMap::new(),
             HashMap::new(),

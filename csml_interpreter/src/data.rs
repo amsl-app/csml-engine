@@ -1,32 +1,31 @@
 pub mod ast;
-pub mod client;
 pub mod context;
+pub(crate) mod core;
 pub mod csml_bot;
 pub mod csml_flow;
 pub mod csml_logs;
 pub mod csml_result;
-pub mod data;
 pub mod error_info;
 pub mod event;
-pub mod fn_args_type;
+pub(crate) mod fn_args_type;
 pub mod hold;
-pub mod literal;
-pub mod memories;
-pub mod message;
+pub(crate) mod literal;
+pub(crate) mod memories;
+pub(crate) mod message;
 pub mod message_data;
-pub mod msg;
+pub(crate) mod msg;
 pub mod position;
 pub mod primitive;
-pub mod tokens;
+pub(crate) mod tokens;
 pub mod warnings;
 
 pub use ast::Interval;
-pub use client::Client;
 pub use context::{ApiInfo, Context, PreviousBot};
+pub use core::Data;
 pub use csml_bot::{CsmlBot, Module, MultiBot};
 pub use csml_flow::CsmlFlow;
+pub use csml_model::Client;
 pub use csml_result::CsmlResult;
-pub use data::Data;
 pub use event::Event;
 pub use fn_args_type::ArgsType;
 pub use hold::{Hold, IndexInfo};
@@ -39,4 +38,4 @@ pub use position::Position;
 pub use msg::MSG;
 
 // limit of steps in a single execution
-pub static STEP_LIMIT: usize = 100;
+pub(crate) const STEP_LIMIT: usize = 100;

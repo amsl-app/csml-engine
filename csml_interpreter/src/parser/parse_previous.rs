@@ -1,7 +1,14 @@
-use crate::data::{ast::*, tokens::*};
+use crate::data::{
+    ast::{Expr, Interval, ObjectType, PreviousType},
+    tokens::{FLOW, PREVIOUS, STEP, Span},
+};
 use crate::parser::{get_interval, parse_comments::comment, tools::get_string, tools::get_tag};
 
-use nom::{error::*, sequence::preceded, *};
+use nom::{
+    Err, IResult, Parser,
+    error::{ContextError, ErrorKind, ParseError},
+    sequence::preceded,
+};
 
 fn get_previous<I, E: ParseError<I>>(
     var: String,
@@ -22,11 +29,11 @@ pub fn parse_previous<'a, E>(s: Span<'a>) -> IResult<Span<'a>, Expr, E>
 where
     E: ParseError<Span<'a>> + ContextError<Span<'a>>,
 {
-    let (s, interval) = preceded(comment, get_interval)(s)?;
+    let (s, interval) = preceded(comment, get_interval).parse(s)?;
     let (s, name) = get_string(s)?;
     let (s, ..) = get_tag(name, PREVIOUS)(s)?;
 
-    let (s, inter) = preceded(comment, get_interval)(s)?;
+    let (s, inter) = preceded(comment, get_interval).parse(s)?;
     let (s, name) = get_string(s)?;
     let (s, previous) = get_previous(name, inter)(s)?;
 

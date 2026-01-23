@@ -14,7 +14,7 @@ fn ok_debug() {
     let data =
         r#"{"messages":[ {"content":{ "args": ["42"] },"content_type":"debug"} ],"memories":[]}"#;
     let msg = format_message(
-        Event::new("payload", "", serde_json::json!({})),
+        &Event::new("payload", "", serde_json::json!({})),
         Context::new(
             HashMap::new(),
             HashMap::new(),
@@ -30,14 +30,14 @@ fn ok_debug() {
     let v1: Value = message_to_json_value(msg);
     let v2: Value = serde_json::from_str(data).unwrap();
 
-    assert_eq!(v1, v2)
+    assert_eq!(v1, v2);
 }
 
 #[test]
 fn ok_debug_step1() {
     let data = r#"{"messages":[ {"content":{ "args": ["1", "2", "3"] },"content_type":"debug"} ],"memories":[]}"#;
     let msg = format_message(
-        Event::new("payload", "", serde_json::json!({})),
+        &Event::new("payload", "", serde_json::json!({})),
         Context::new(
             HashMap::new(),
             HashMap::new(),
@@ -53,5 +53,5 @@ fn ok_debug_step1() {
     let v1: Value = message_to_json_value(msg);
     let v2: Value = serde_json::from_str(data).unwrap();
 
-    assert_eq!(v1, v2)
+    assert_eq!(v1, v2);
 }

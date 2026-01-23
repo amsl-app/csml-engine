@@ -1,35 +1,49 @@
 use crate::data::error_info::ErrorInfo;
 use crate::data::position::Position;
+use crate::data::primitive::common;
+use crate::data::primitive::common::{get_args, get_int_args, get_string_args};
+use crate::data::primitive::utils::{illegal_math_ops, require_n_args};
 use crate::data::{
+    Literal, MemoryType,
     ast::Interval,
-    csml_logs::*,
     literal,
     literal::ContentType,
     message::Message,
     primitive::{
-        tools_crypto, tools_jwt, tools_smtp, tools_time, Data, MessageData, Primitive,
-        PrimitiveArray, PrimitiveBoolean, PrimitiveInt, PrimitiveNull, PrimitiveString,
-        PrimitiveType, Right, MSG,
+        Data, MSG, MessageData, Primitive, PrimitiveArray, PrimitiveBoolean, PrimitiveInt,
+        PrimitiveNull, PrimitiveString, PrimitiveType, Right, tools_crypto, tools_jwt, tools_smtp,
+        tools_time,
     },
     tokens::TYPES,
-    Literal, MemoryType,
 };
-use crate::error_format::*;
+use crate::error_format::{
+    ERROR_CONSTANT_MUTABLE_FUNCTION, ERROR_DIGEST, ERROR_DIGEST_ALGO, ERROR_HASH, ERROR_HASH_ALGO,
+    ERROR_HMAC_KEY, ERROR_HTTP_QUERY, ERROR_HTTP_SEND, ERROR_HTTP_SET, ERROR_HTTP_UNKNOWN_METHOD,
+    ERROR_JWT_ALGO, ERROR_JWT_DECODE_ALGO, ERROR_JWT_DECODE_SECRET, ERROR_JWT_SECRET,
+    ERROR_JWT_SIGN_ALGO, ERROR_JWT_SIGN_CLAIMS, ERROR_JWT_SIGN_SECRET, ERROR_JWT_TOKEN,
+    ERROR_JWT_VALIDATION_ALGO, ERROR_JWT_VALIDATION_CLAIMS, ERROR_JWT_VALIDATION_SECRETE,
+    ERROR_OBJECT_ASSIGN, ERROR_OBJECT_CONTAINS, ERROR_OBJECT_GET_GENERICS, ERROR_OBJECT_INSERT,
+    ERROR_OBJECT_REMOVE, ERROR_OBJECT_UNKNOWN_METHOD, ERROR_UNREACHABLE, OVERFLOWING_OPERATION,
+    gen_error_info,
+};
 use crate::interpreter::{
     builtins::http_builtin::http_request, json_to_rust::json_to_literal,
     variable_handler::match_literals::match_obj,
 };
 use base64::Engine;
-use std::cmp::Ordering;
-use std::{collections::HashMap, sync::mpsc};
-
 use chrono::{DateTime, FixedOffset, LocalResult, TimeZone, Timelike, Utc};
 use chrono_tz::{Tz, UTC};
 use lettre::Transport;
+use num_traits::ToPrimitive;
 use phf::phf_map;
 use regex::Regex;
 use serde::{Deserialize, Serialize};
-
+use serde_json::json;
+use std::any::Any;
+use std::cmp::Ordering;
+use std::error::Error;
+use std::sync::LazyLock;
+use std::{collections::HashMap, sync::mpsc};
 ////////////////////////////////////////////////////////////////////////////////
 // DATA STRUCTURES
 ////////////////////////////////////////////////////////////////////////////////
@@ -103,10 +117,10 @@ const FUNCTIONS_READ: phf::Map<&'static str, (PrimitiveMethod, Right)> = phf_map
     "is_float" => (PrimitiveObject::is_float as PrimitiveMethod, Right::Read),
     "type_of" => (PrimitiveObject::type_of as PrimitiveMethod, Right::Read),
     "get_info" => (PrimitiveObject::get_info as PrimitiveMethod, Right::Read),
-    "is_error" => (PrimitiveObject::is_error as PrimitiveMethod, Right::Read),
-    "to_xml" => (PrimitiveObject::to_xml as PrimitiveMethod, Right::Read),
-    "to_yaml" => (PrimitiveObject::to_yaml as PrimitiveMethod, Right::Read),
-    "to_string" => (PrimitiveObject::to_string as PrimitiveMethod, Right::Read),
+    "is_error" => ((|_, _, additional_info, _, interval, _| common::is_error(additional_info, interval)) as PrimitiveMethod, Right::Read),
+    "to_xml" => (PrimitiveObject::convert_to_xml as PrimitiveMethod, Right::Read),
+    "to_yaml" => (PrimitiveObject::convert_to_yaml as PrimitiveMethod, Right::Read),
+    "to_string" => (PrimitiveObject::convert_to_string as PrimitiveMethod, Right::Read),
 
     "contains" => (PrimitiveObject::contains as PrimitiveMethod, Right::Read),
     "is_empty" => (PrimitiveObject::is_empty as PrimitiveMethod, Right::Read),
@@ -126,8 +140,8 @@ const FUNCTIONS_WRITE: phf::Map<&'static str, (PrimitiveMethod, Right)> = phf_ma
 
 type PrimitiveMethod = fn(
     object: &mut PrimitiveObject,
-    args: &HashMap<String, Literal>,
-    additional_info: &Option<HashMap<String, Literal>>,
+    args: HashMap<String, Literal>,
+    additional_info: Option<&HashMap<String, Literal>>,
     data: &mut Data,
     interval: Interval,
     content_type: &str,
@@ -138,15 +152,18 @@ pub struct PrimitiveObject {
     pub value: HashMap<String, Literal>,
 }
 
+static EMAIL_REGEX: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"^[^@]+@[^@]+\.[^@]+$").unwrap());
+
 ////////////////////////////////////////////////////////////////////////////////
 // METHOD FUNCTIONS
 ////////////////////////////////////////////////////////////////////////////////
 
 impl PrimitiveObject {
     fn set(
-        object: &mut PrimitiveObject,
-        args: &HashMap<String, Literal>,
-        _additional_info: &Option<HashMap<String, Literal>>,
+        object: &mut Self,
+        mut args: HashMap<String, Literal>,
+        _additional_info: Option<&HashMap<String, Literal>>,
         data: &mut Data,
         interval: Interval,
         _content_type: &str,
@@ -156,61 +173,66 @@ impl PrimitiveObject {
         if args.len() != 1 {
             return Err(gen_error_info(
                 Position::new(interval, &data.context.flow),
-                format!("usage: {}", usage),
+                format!("usage: {usage}"),
             ));
         }
 
-        let literal = match args.get("arg0") {
-            Some(res) => res,
-            _ => {
-                return Err(gen_error_info(
-                    Position::new(interval, &data.context.flow),
-                    format!("usage: {}", usage),
-                ));
-            }
+        let Some(literal) = args.remove("arg0") else {
+            return Err(gen_error_info(
+                Position::new(interval, &data.context.flow),
+                format!("usage: {usage}"),
+            ));
         };
 
-        let mut object = object.to_owned();
+        let mut object = object.clone();
 
-        let header = Literal::get_value::<HashMap<String, Literal>>(
+        let header = Literal::get_value::<HashMap<String, Literal>, _>(
             &literal.primitive,
             &data.context.flow,
             interval,
-            ERROR_HTTP_SET.to_owned(),
+            ERROR_HTTP_SET,
         )?;
 
-        insert_to_object(header, &mut object, "header", &data.context.flow, literal);
+        insert_to_object(
+            header,
+            &mut object,
+            "header",
+            &data.context.flow,
+            literal.clone(),
+        );
 
-        let mut result = PrimitiveObject::get_literal(&object.value, interval);
+        let mut result = Self::get_literal(object.value, interval);
 
         result.set_content_type("http");
 
         Ok(result)
     }
 
+    #[allow(clippy::unnecessary_wraps)]
     fn disable_ssl_verify(
-        object: &mut PrimitiveObject,
-        _args: &HashMap<String, Literal>,
-        _additional_info: &Option<HashMap<String, Literal>>,
+        object: &mut Self,
+        _args: HashMap<String, Literal>,
+        _additional_info: Option<&HashMap<String, Literal>>,
         _data: &mut Data,
         interval: Interval,
         _content_type: &str,
     ) -> Result<Literal, ErrorInfo> {
-        let mut object = object.to_owned();
+        let mut object = object.clone();
 
         let value = PrimitiveBoolean::get_literal(true, interval);
         object.value.insert("disable_ssl_verify".to_owned(), value);
 
-        let mut result = PrimitiveObject::get_literal(&object.value, interval);
+        let mut result = Self::get_literal(object.value, interval);
         result.set_content_type("http");
 
         Ok(result)
     }
 
+    #[allow(clippy::needless_pass_by_value)]
     fn auth(
-        object: &mut PrimitiveObject,
-        args: &HashMap<String, Literal>,
-        _additional_info: &Option<HashMap<String, Literal>>,
+        object: &mut Self,
+        args: HashMap<String, Literal>,
+        _additional_info: Option<&HashMap<String, Literal>>,
         data: &mut Data,
         interval: Interval,
         _content_type: &str,
@@ -220,58 +242,30 @@ impl PrimitiveObject {
         if args.len() < 2 {
             return Err(gen_error_info(
                 Position::new(interval, &data.context.flow),
-                format!("usage: {}", usage),
+                format!("usage: {usage}"),
             ));
         }
 
-        let username = match args.get("arg0") {
-            Some(lit) => Literal::get_value::<String>(
-                &lit.primitive,
-                &data.context.flow,
-                lit.interval,
-                format!("usage: {}", usage),
-            )?,
-            _ => {
-                return Err(gen_error_info(
-                    Position::new(interval, &data.context.flow),
-                    format!("usage: {}", usage),
-                ));
-            }
-        };
+        let [username, password] = get_string_args(&args, data, interval, usage, usage)?;
 
-        let password = match args.get("arg1") {
-            Some(lit) => Literal::get_value::<String>(
-                &lit.primitive,
-                &data.context.flow,
-                lit.interval,
-                format!("usage: {}", usage),
-            )?,
-            _ => {
-                return Err(gen_error_info(
-                    Position::new(interval, &data.context.flow),
-                    format!("usage: {}", usage),
-                ));
-            }
-        };
-
-        let user_password = format!("{}:{}", username, password);
+        let user_password = format!("{username}:{password}");
         let authorization = format!(
             "Basic {}",
             base64::engine::general_purpose::STANDARD.encode(user_password.as_bytes())
         );
 
-        let mut object = object.to_owned();
+        let mut object = object.clone();
 
         let mut header = HashMap::new();
         header.insert(
             "Authorization".to_owned(),
             PrimitiveString::get_literal(&authorization, interval),
         );
-        let literal = PrimitiveObject::get_literal(&header, interval);
+        let literal = Self::get_literal(header.clone(), interval);
 
-        insert_to_object(&header, &mut object, "header", &data.context.flow, &literal);
+        insert_to_object(&header, &mut object, "header", &data.context.flow, literal);
 
-        let mut result = PrimitiveObject::get_literal(&object.value, interval);
+        let mut result = Self::get_literal(object.value, interval);
 
         result.set_content_type("http");
 
@@ -279,67 +273,59 @@ impl PrimitiveObject {
     }
 
     fn query(
-        object: &mut PrimitiveObject,
-        args: &HashMap<String, Literal>,
-        _additional_info: &Option<HashMap<String, Literal>>,
+        object: &mut Self,
+        mut args: HashMap<String, Literal>,
+        _additional_info: Option<&HashMap<String, Literal>>,
         data: &mut Data,
         interval: Interval,
         _content_type: &str,
     ) -> Result<Literal, ErrorInfo> {
         let usage = "query(parameters: object) => http object";
 
-        if args.len() != 1 {
+        require_n_args(1, &args, interval, data, usage)?;
+
+        let Some(literal) = args.remove("arg0") else {
             return Err(gen_error_info(
                 Position::new(interval, &data.context.flow),
-                format!("usage: {}", usage),
+                format!("usage: {usage}"),
             ));
-        }
-
-        let literal = match args.get("arg0") {
-            Some(res) => res,
-            _ => {
-                return Err(gen_error_info(
-                    Position::new(interval, &data.context.flow),
-                    format!("usage: {}", usage),
-                ));
-            }
         };
 
-        let mut object = object.to_owned();
+        let mut object = object.clone();
 
-        let header = Literal::get_value::<HashMap<String, Literal>>(
+        let header = Literal::get_value::<HashMap<String, Literal>, _>(
             &literal.primitive,
             &data.context.flow,
             interval,
-            ERROR_HTTP_QUERY.to_owned(),
+            ERROR_HTTP_QUERY,
         )?;
-        insert_to_object(header, &mut object, "query", &data.context.flow, literal);
+        insert_to_object(
+            header,
+            &mut object,
+            "query",
+            &data.context.flow,
+            literal.clone(),
+        );
 
-        let mut result = PrimitiveObject::get_literal(&object.value, interval);
+        let mut result = Self::get_literal(object.value, interval);
 
         result.set_content_type("http");
 
         Ok(result)
     }
 
+    #[allow(clippy::needless_pass_by_value)]
     fn get_http(
-        object: &mut PrimitiveObject,
-        args: &HashMap<String, Literal>,
-        _additional_info: &Option<HashMap<String, Literal>>,
+        object: &mut Self,
+        args: HashMap<String, Literal>,
+        _additional_info: Option<&HashMap<String, Literal>>,
         data: &mut Data,
         interval: Interval,
         _content_type: &str,
     ) -> Result<Literal, ErrorInfo> {
-        let usage = "get() => http object";
+        require_n_args(0, &args, interval, data, "get() => http object")?;
 
-        if !args.is_empty() {
-            return Err(gen_error_info(
-                Position::new(interval, &data.context.flow),
-                format!("usage: {}", usage),
-            ));
-        }
-
-        let mut object = object.to_owned();
+        let mut object = object.clone();
 
         object.value.insert(
             "method".to_owned(),
@@ -348,108 +334,112 @@ impl PrimitiveObject {
 
         object.value.remove("body");
 
-        let mut result = PrimitiveObject::get_literal(&object.value, interval);
+        let mut result = Self::get_literal(object.value, interval);
 
         result.set_content_type("http");
 
         Ok(result)
     }
 
+    #[allow(clippy::needless_pass_by_value, clippy::unnecessary_wraps)]
     fn post(
-        object: &mut PrimitiveObject,
-        args: &HashMap<String, Literal>,
-        _additional_info: &Option<HashMap<String, Literal>>,
+        object: &mut Self,
+        args: HashMap<String, Literal>,
+        _additional_info: Option<&HashMap<String, Literal>>,
         _data: &mut Data,
         interval: Interval,
         _content_type: &str,
     ) -> Result<Literal, ErrorInfo> {
         match args.get("arg0") {
-            Some(body) => object.value.insert("body".to_owned(), body.to_owned()),
+            Some(body) => object.value.insert("body".to_owned(), body.clone()),
             _ => object.value.remove("body"),
         };
 
-        let mut object = object.to_owned();
+        let mut object = object.clone();
 
         object.value.insert(
             "method".to_owned(),
             PrimitiveString::get_literal("post", interval),
         );
 
-        let mut result = PrimitiveObject::get_literal(&object.value, interval);
+        let mut result = Self::get_literal(object.value, interval);
 
         result.set_content_type("http");
 
         Ok(result)
     }
 
+    #[allow(clippy::needless_pass_by_value, clippy::unnecessary_wraps)]
     fn put(
-        object: &mut PrimitiveObject,
-        args: &HashMap<String, Literal>,
-        _additional_info: &Option<HashMap<String, Literal>>,
+        object: &mut Self,
+        args: HashMap<String, Literal>,
+        _additional_info: Option<&HashMap<String, Literal>>,
         _data: &mut Data,
         interval: Interval,
         _content_type: &str,
     ) -> Result<Literal, ErrorInfo> {
         match args.get("arg0") {
-            Some(body) => object.value.insert("body".to_owned(), body.to_owned()),
+            Some(body) => object.value.insert("body".to_owned(), body.clone()),
             _ => object.value.remove("body"),
         };
 
-        let mut object = object.to_owned();
+        let mut object = object.clone();
 
         object.value.insert(
             "method".to_owned(),
             PrimitiveString::get_literal("put", interval),
         );
 
-        let mut result = PrimitiveObject::get_literal(&object.value, interval);
+        let mut result = Self::get_literal(object.value, interval);
 
         result.set_content_type("http");
 
         Ok(result)
     }
 
+    #[allow(clippy::needless_pass_by_value, clippy::unnecessary_wraps)]
     fn delete(
-        object: &mut PrimitiveObject,
-        args: &HashMap<String, Literal>,
-        _additional_info: &Option<HashMap<String, Literal>>,
+        object: &mut Self,
+        args: HashMap<String, Literal>,
+        _additional_info: Option<&HashMap<String, Literal>>,
         _data: &mut Data,
         interval: Interval,
         _content_type: &str,
     ) -> Result<Literal, ErrorInfo> {
         match args.get("arg0") {
-            Some(body) => object.value.insert("body".to_owned(), body.to_owned()),
+            Some(body) => object.value.insert("body".to_owned(), body.clone()),
             _ => object.value.remove("body"),
         };
 
-        let mut object = object.to_owned();
+        let mut object = object.clone();
 
         object.value.insert(
             "method".to_owned(),
             PrimitiveString::get_literal("delete", interval),
         );
 
-        let mut result = PrimitiveObject::get_literal(&object.value, interval);
+        let mut result = Self::get_literal(object.value, interval);
 
         result.set_content_type("http");
 
         Ok(result)
     }
 
+    #[allow(clippy::needless_pass_by_value, clippy::unnecessary_wraps)]
     fn patch(
-        object: &mut PrimitiveObject,
-        args: &HashMap<String, Literal>,
-        _additional_info: &Option<HashMap<String, Literal>>,
+        object: &mut Self,
+        args: HashMap<String, Literal>,
+        _additional_info: Option<&HashMap<String, Literal>>,
         _data: &mut Data,
         interval: Interval,
         _content_type: &str,
     ) -> Result<Literal, ErrorInfo> {
         let body = match args.get("arg0") {
-            Some(res) => res.to_owned(),
+            Some(res) => res.clone(),
             _ => PrimitiveNull::get_literal(Interval::default()),
         };
 
-        let mut object = object.to_owned();
+        let mut object = object.clone();
 
         object.value.insert(
             "method".to_owned(),
@@ -458,32 +448,26 @@ impl PrimitiveObject {
 
         object.value.insert("body".to_owned(), body);
 
-        let mut result = PrimitiveObject::get_literal(&object.value, interval);
+        let mut result = Self::get_literal(object.value, interval);
 
         result.set_content_type("http");
 
         Ok(result)
     }
 
+    #[allow(clippy::needless_pass_by_value)]
     fn send(
-        object: &mut PrimitiveObject,
-        args: &HashMap<String, Literal>,
-        _additional_info: &Option<HashMap<String, Literal>>,
+        object: &mut Self,
+        args: HashMap<String, Literal>,
+        _additional_info: Option<&HashMap<String, Literal>>,
         data: &mut Data,
         interval: Interval,
         _content_type: &str,
     ) -> Result<Literal, ErrorInfo> {
-        let usage = "send() => http object";
-
-        if !args.is_empty() {
-            return Err(gen_error_info(
-                Position::new(interval, &data.context.flow),
-                format!("usage: {}", usage),
-            ));
-        }
+        require_n_args(0, &args, interval, data, "send() => http object")?;
 
         if let Some(literal) = object.value.get("method") {
-            let method = match Literal::get_value::<String>(
+            let method = match Literal::get_value::<String, _>(
                 &literal.primitive,
                 &data.context.flow,
                 interval,
@@ -519,54 +503,20 @@ impl PrimitiveObject {
 }
 
 impl PrimitiveObject {
+    #[allow(clippy::needless_pass_by_value)]
     fn credentials(
-        object: &mut PrimitiveObject,
-        args: &HashMap<String, Literal>,
-        _additional_info: &Option<HashMap<String, Literal>>,
+        object: &mut Self,
+        args: HashMap<String, Literal>,
+        _additional_info: Option<&HashMap<String, Literal>>,
         data: &mut Data,
         interval: Interval,
         _content_type: &str,
     ) -> Result<Literal, ErrorInfo> {
         let usage = "credentials(username, password) => smtp object";
 
-        if args.len() < 2 {
-            return Err(gen_error_info(
-                Position::new(interval, &data.context.flow),
-                format!("usage: {}", usage),
-            ));
-        }
+        let [username, password] = get_string_args(&args, data, interval, usage, usage)?;
 
-        let username = match args.get("arg0") {
-            Some(lit) => Literal::get_value::<String>(
-                &lit.primitive,
-                &data.context.flow,
-                lit.interval,
-                format!("usage: {}", usage),
-            )?,
-            _ => {
-                return Err(gen_error_info(
-                    Position::new(interval, &data.context.flow),
-                    format!("usage: {}", usage),
-                ));
-            }
-        };
-
-        let password = match args.get("arg1") {
-            Some(lit) => Literal::get_value::<String>(
-                &lit.primitive,
-                &data.context.flow,
-                lit.interval,
-                format!("usage: {}", usage),
-            )?,
-            _ => {
-                return Err(gen_error_info(
-                    Position::new(interval, &data.context.flow),
-                    format!("usage: {}", usage),
-                ));
-            }
-        };
-
-        let mut object = object.to_owned();
+        let mut object = object.clone();
 
         object.value.insert(
             "username".to_owned(),
@@ -578,109 +528,73 @@ impl PrimitiveObject {
             PrimitiveString::get_literal(password, interval),
         );
 
-        let mut result = PrimitiveObject::get_literal(&object.value, interval);
+        let mut result = Self::get_literal(object.value, interval);
 
         result.set_content_type("smtp");
 
         Ok(result)
     }
 
+    #[allow(clippy::needless_pass_by_value)]
     fn port(
-        object: &mut PrimitiveObject,
-        args: &HashMap<String, Literal>,
-        _additional_info: &Option<HashMap<String, Literal>>,
+        object: &mut Self,
+        args: HashMap<String, Literal>,
+        _additional_info: Option<&HashMap<String, Literal>>,
         data: &mut Data,
         interval: Interval,
         _content_type: &str,
     ) -> Result<Literal, ErrorInfo> {
         let usage = "port(port) => smtp object";
 
-        if args.is_empty() {
-            return Err(gen_error_info(
-                Position::new(interval, &data.context.flow),
-                format!("usage: {}", usage),
-            ));
-        }
+        let [port]: [i64; 1] =
+            get_int_args(&args, data, interval, format!("usage: {usage}"), usage)?;
 
-        let port = match args.get("arg0") {
-            Some(lit) => Literal::get_value::<i64>(
-                &lit.primitive,
-                &data.context.flow,
-                lit.interval,
-                format!("usage: {}", usage),
-            )?,
-            _ => {
-                return Err(gen_error_info(
-                    Position::new(interval, &data.context.flow),
-                    format!("usage: {}", usage),
-                ));
-            }
-        };
+        let mut object = object.clone();
 
-        let mut object = object.to_owned();
+        object
+            .value
+            .insert("port".to_owned(), PrimitiveInt::get_literal(port, interval));
 
-        object.value.insert(
-            "port".to_owned(),
-            PrimitiveInt::get_literal(*port, interval),
-        );
-
-        let mut result = PrimitiveObject::get_literal(&object.value, interval);
+        let mut result = Self::get_literal(object.value, interval);
 
         result.set_content_type("smtp");
 
         Ok(result)
     }
 
+    #[allow(clippy::needless_pass_by_value)]
     fn smtp_tls(
-        object: &mut PrimitiveObject,
-        args: &HashMap<String, Literal>,
-        _additional_info: &Option<HashMap<String, Literal>>,
+        object: &mut Self,
+        args: HashMap<String, Literal>,
+        _additional_info: Option<&HashMap<String, Literal>>,
         data: &mut Data,
         interval: Interval,
         _content_type: &str,
     ) -> Result<Literal, ErrorInfo> {
         let usage = "tls(BOOLEAN) => smtp object";
+        require_n_args(1, &args, interval, data, usage)?;
 
-        if args.is_empty() {
-            return Err(gen_error_info(
-                Position::new(interval, &data.context.flow),
-                format!("usage: {}", usage),
-            ));
-        }
+        let [tls]: [&bool; 1] = get_args(&args, data, interval, usage, usage)?;
 
-        let tls = match args.get("arg0") {
-            Some(lit) => Literal::get_value::<bool>(
-                &lit.primitive,
-                &data.context.flow,
-                lit.interval,
-                format!("usage: {}", usage),
-            )?,
-            _ => {
-                return Err(gen_error_info(
-                    Position::new(interval, &data.context.flow),
-                    format!("usage: {}", usage),
-                ));
-            }
-        };
-
-        let mut object = object.to_owned();
+        let mut object = object.clone();
 
         object.value.insert(
             "tls".to_owned(),
             PrimitiveBoolean::get_literal(*tls, interval),
         );
 
-        let mut result = PrimitiveObject::get_literal(&object.value, interval);
+        let mut result = Self::get_literal(object.value, interval);
 
         result.set_content_type("smtp");
 
         Ok(result)
     }
 
+    #[allow(clippy::needless_pass_by_value)]
     fn set_auth_mechanism(
-        object: &mut PrimitiveObject,
-        args: &HashMap<String, Literal>,
-        _additional_info: &Option<HashMap<String, Literal>>,
+        object: &mut Self,
+        args: HashMap<String, Literal>,
+        _additional_info: Option<&HashMap<String, Literal>>,
         data: &mut Data,
         interval: Interval,
         _content_type: &str,
@@ -697,11 +611,11 @@ impl PrimitiveObject {
                 map
             }
             Some(lit) if lit.content_type == "array" => {
-                let vec = Literal::get_value::<Vec<Literal>>(
+                let vec = Literal::get_value::<Vec<Literal>, _>(
                     &lit.primitive,
                     &data.context.flow,
                     lit.interval,
-                    format!("usage: {}", usage),
+                    format!("usage: {usage}"),
                 )?;
 
                 let map = vec
@@ -715,157 +629,88 @@ impl PrimitiveObject {
                 if map.is_empty() {
                     return Err(gen_error_info(
                         Position::new(interval, &data.context.flow),
-                        format!("usage: {}", usage),
+                        format!("usage: {usage}"),
                     ));
                 }
 
                 map
             }
             _ => {
-                csml_logger(
-                    CsmlLog::new(
-                        None,
-                        Some(data.context.flow.to_string()),
-                        Some(interval.start_line),
-                        format!("set_auth_mechanism wrong mechanism name {:?}", args),
-                    ),
-                    LogLvl::Error,
-                );
+                tracing::error!(?args, "set_auth_mechanism wrong mechanism");
 
                 return Err(gen_error_info(
                     Position::new(interval, &data.context.flow),
-                    format!("usage: {}", usage),
+                    format!("usage: {usage}"),
                 ));
             }
         };
 
-        let mut object = object.to_owned();
+        let mut object = object.clone();
 
         object.value.insert(
             "auth_mechanisms".to_owned(),
-            PrimitiveObject::get_literal(&auth_mechanisms, interval),
+            Self::get_literal(auth_mechanisms, interval),
         );
 
-        let mut result = PrimitiveObject::get_literal(&object.value, interval);
+        let mut result = Self::get_literal(object.value, interval);
 
         result.set_content_type("smtp");
 
         Ok(result)
     }
 
+    #[allow(clippy::needless_pass_by_value)]
     fn starttls(
-        object: &mut PrimitiveObject,
-        args: &HashMap<String, Literal>,
-        _additional_info: &Option<HashMap<String, Literal>>,
+        object: &mut Self,
+        args: HashMap<String, Literal>,
+        _additional_info: Option<&HashMap<String, Literal>>,
         data: &mut Data,
         interval: Interval,
         _content_type: &str,
     ) -> Result<Literal, ErrorInfo> {
         let usage = "starttls(BOOLEAN) => smtp object";
 
-        if args.is_empty() {
-            return Err(gen_error_info(
-                Position::new(interval, &data.context.flow),
-                format!("usage: {}", usage),
-            ));
-        }
+        let [tls]: [&bool; 1] = get_args(&args, data, interval, usage, usage)?;
 
-        let tls = match args.get("arg0") {
-            Some(lit) => Literal::get_value::<bool>(
-                &lit.primitive,
-                &data.context.flow,
-                lit.interval,
-                format!("usage: {}", usage),
-            )?,
-            _ => {
-                return Err(gen_error_info(
-                    Position::new(interval, &data.context.flow),
-                    format!("usage: {}", usage),
-                ));
-            }
-        };
-
-        let mut object = object.to_owned();
+        let mut object = object.clone();
 
         object.value.insert(
             "starttls".to_owned(),
             PrimitiveBoolean::get_literal(*tls, interval),
         );
 
-        let mut result = PrimitiveObject::get_literal(&object.value, interval);
+        let mut result = Self::get_literal(object.value.clone(), interval);
 
         result.set_content_type("smtp");
 
         Ok(result)
     }
 
+    #[allow(clippy::needless_pass_by_value)]
     fn smtp_send(
-        object: &mut PrimitiveObject,
-        args: &HashMap<String, Literal>,
-        _additional_info: &Option<HashMap<String, Literal>>,
+        object: &mut Self,
+        args: HashMap<String, Literal>,
+        _additional_info: Option<&HashMap<String, Literal>>,
         data: &mut Data,
         interval: Interval,
         _content_type: &str,
     ) -> Result<Literal, ErrorInfo> {
         let usage = "send(email) => smtp object";
-        if args.is_empty() {
-            return Err(gen_error_info(
-                Position::new(interval, &data.context.flow),
-                format!("usage: {}", usage),
-            ));
-        }
 
-        let csml_email = match args.get("arg0") {
-            Some(lit) => Literal::get_value::<HashMap<String, Literal>>(
-                &lit.primitive,
-                &data.context.flow,
-                lit.interval,
-                format!("usage: {}", usage),
-            )?,
-            _ => {
-                return Err(gen_error_info(
-                    Position::new(interval, &data.context.flow),
-                    format!("usage: {}", usage),
-                ));
-            }
-        };
+        let [csml_email]: [&HashMap<String, Literal>; 1] =
+            get_args(&args, data, interval, usage, usage)?;
 
         let email = tools_smtp::format_email(csml_email, data, interval)?;
-        csml_logger(
-            CsmlLog::new(
-                None,
-                Some(data.context.flow.to_string()),
-                Some(interval.start_line),
-                format!("send email: {:?}", email),
-            ),
-            LogLvl::Info,
-        );
-        csml_logger(
-            CsmlLog::new(
-                None,
-                Some(data.context.flow.to_string()),
-                Some(interval.start_line),
-                format!("send email: {:?}, mailer: {:?}", email, object.value),
-            ),
-            LogLvl::Debug,
-        );
+        tracing::debug!(?email, mailer = ?object.value, flow = data.context.flow, line = interval.start_line, "send email");
         let mailer = tools_smtp::get_mailer(&mut object.value, data, interval)?;
 
         match mailer.send(&email) {
             Ok(_) => Ok(PrimitiveBoolean::get_literal(true, interval)),
-            Err(e) => {
-                csml_logger(
-                    CsmlLog::new(
-                        None,
-                        Some(data.context.flow.to_string()),
-                        Some(interval.start_line),
-                        format!("send email failed {:?}", e),
-                    ),
-                    LogLvl::Error,
-                );
+            Err(error) => {
+                tracing::error!(error = &error as &dyn Error, "send email failed");
                 Err(gen_error_info(
                     Position::new(interval, &data.context.flow),
-                    format!("Could not send email: {:?}", e),
+                    format!("Could not send email: {error:?}"),
                 ))
             }
         }
@@ -873,52 +718,53 @@ impl PrimitiveObject {
 }
 
 impl PrimitiveObject {
+    #[allow(clippy::needless_pass_by_value)]
     fn set_date_at(
-        object: &mut PrimitiveObject,
-        args: &HashMap<String, Literal>,
-        _additional_info: &Option<HashMap<String, Literal>>,
-        _data: &mut Data,
+        object: &mut Self,
+        args: HashMap<String, Literal>,
+        _additional_info: Option<&HashMap<String, Literal>>,
+        data: &mut Data,
         interval: Interval,
         _content_type: &str,
     ) -> Result<Literal, ErrorInfo> {
-        let date = tools_time::get_date(args);
+        let date = tools_time::get_date(&args);
 
-        // let date = Utc
-        //     .ymd(
-        //         date[0] as i32, // year
-        //         date[1] as u32, // month
-        //         date[2] as u32, // day
-        //     )
-        //     .and_hms_milli_opt(
-        //         date[3] as u32, // hour
-        //         date[4] as u32, // min
-        //         date[5] as u32, // sec
-        //         date[6] as u32, // milli
-        //     );
+        let get_error = || {
+            gen_error_info(
+                Position::new(interval, &data.context.flow),
+                "usage: at(Y, M, D, h, m, s, n) => date".to_string(),
+            )
+        };
 
-        let nanos = (date[6] as u32).checked_mul(1_000_000);
+        let cast_u32 = |val: i64| val.to_u32().ok_or_else(get_error);
 
-        let date = nanos.map(|nanos| {
-            let date = Utc.with_ymd_and_hms(
-                date[0] as i32, // year
-                date[1] as u32, // month
-                date[2] as u32, // day
-                date[3] as u32, // hour
-                date[4] as u32, // min
-                date[5] as u32, // sec
-            );
-            date.map(|dt| dt.with_nanosecond(nanos))
-        });
+        let nanos = cast_u32(date[6])?.checked_mul(1_000_000);
+
+        let date = nanos
+            .map(|nanos| -> Result<_, ErrorInfo> {
+                let date = Utc.with_ymd_and_hms(
+                    date[0].to_i32().ok_or_else(get_error)?, // year
+                    cast_u32(date[1])?,                      // month
+                    cast_u32(date[2])?,                      // day
+                    cast_u32(date[3])?,                      // hour
+                    cast_u32(date[4])?,                      // min
+                    cast_u32(date[5])?,                      // sec
+                );
+                Ok(date.map(|dt| dt.with_nanosecond(nanos)))
+            })
+            .transpose()?;
 
         match date {
-            Some(LocalResult::Single(Some(date)))
-            | Some(LocalResult::Ambiguous(Some(date), _))
-            | Some(LocalResult::Ambiguous(_, Some(date))) => {
+            Some(
+                LocalResult::Single(Some(date))
+                | LocalResult::Ambiguous(Some(date), _)
+                | LocalResult::Ambiguous(_, Some(date)),
+            ) => {
                 object.value.insert(
                     "milliseconds".to_owned(),
                     PrimitiveInt::get_literal(date.timestamp_millis(), interval),
                 );
-                let mut lit = PrimitiveObject::get_literal(&object.value, interval);
+                let mut lit = Self::get_literal(object.value.clone(), interval);
                 lit.set_content_type("time");
 
                 Ok(lit)
@@ -927,59 +773,50 @@ impl PrimitiveObject {
         }
     }
 
+    #[allow(clippy::needless_pass_by_value)]
     fn with_timezone(
-        object: &mut PrimitiveObject,
-        args: &HashMap<String, Literal>,
-        _additional_info: &Option<HashMap<String, Literal>>,
+        object: &mut Self,
+        args: HashMap<String, Literal>,
+        _additional_info: Option<&HashMap<String, Literal>>,
         data: &mut Data,
         interval: Interval,
         _content_type: &str,
     ) -> Result<Literal, ErrorInfo> {
-        let usage = "with_timezone(timezone_name: string) => Time Object. Example: with_timezone(\"Europe/Paris\") ";
-
-        let timezone = match args.get("arg0") {
-            Some(lit) if lit.primitive.get_type() == PrimitiveType::PrimitiveString => {
-                let tz_name = Literal::get_value::<String>(
-                    &lit.primitive,
-                    &data.context.flow,
-                    interval,
-                    "".to_string(),
-                )?;
-                let tz: Tz = match tz_name.parse() {
-                    Ok(tz) => tz,
-                    Err(_) => {
-                        return Err(gen_error_info(
-                            Position::new(interval, &data.context.flow),
-                            format!("invalid timezone {}", tz_name),
-                        ));
-                    }
-                };
-
-                tz.to_string()
-            }
-            _ => {
+        let [tz_name]: [&String; 1] = get_string_args(
+            &args,
+            data,
+            interval,
+            String::new(),
+            "with_timezone(timezone_name: string) => Time Object. Example: with_timezone(\"Europe/Paris\") ",
+        )?;
+        let tz: Tz = match tz_name.parse() {
+            Ok(tz) => tz,
+            Err(_) => {
                 return Err(gen_error_info(
                     Position::new(interval, &data.context.flow),
-                    format!("usage: {}", usage),
+                    format!("invalid timezone {tz_name}"),
                 ));
             }
         };
+
+        let timezone = tz.to_string();
 
         object.value.insert(
             "timezone".to_owned(),
             PrimitiveString::get_literal(&timezone, interval),
         );
 
-        let mut lit = PrimitiveObject::get_literal(&object.value, interval);
+        let mut lit = Self::get_literal(object.value.clone(), interval);
         lit.set_content_type("time");
 
         Ok(lit)
     }
 
+    #[allow(clippy::needless_pass_by_value)]
     fn unix(
-        object: &mut PrimitiveObject,
-        args: &HashMap<String, Literal>,
-        _additional_info: &Option<HashMap<String, Literal>>,
+        object: &mut Self,
+        args: HashMap<String, Literal>,
+        _additional_info: Option<&HashMap<String, Literal>>,
         data: &mut Data,
         interval: Interval,
         _content_type: &str,
@@ -988,15 +825,15 @@ impl PrimitiveObject {
 
         let time_type = match args.get("arg0") {
             Some(lit) if lit.primitive.get_type() == PrimitiveType::PrimitiveString => {
-                let time_value = Literal::get_value::<String>(
+                let time_value = Literal::get_value::<String, _>(
                     &lit.primitive,
                     &data.context.flow,
                     interval,
-                    "".to_string(),
+                    String::new(),
                 )?;
 
                 match time_value {
-                    t_val if t_val == "s" => t_val.to_owned(),
+                    t_val if t_val == "s" => t_val.clone(),
                     _ => "m".to_owned(),
                 }
             }
@@ -1005,21 +842,18 @@ impl PrimitiveObject {
 
         match object.value.get("milliseconds") {
             Some(lit) if lit.primitive.get_type() == PrimitiveType::PrimitiveInt => {
-                let millis = Literal::get_value::<i64>(
+                let millis = Literal::get_value::<i64, _>(
                     &lit.primitive,
                     &data.context.flow,
                     interval,
-                    "".to_string(),
+                    String::new(),
                 )?;
 
-                let date = match Utc.timestamp_millis_opt(*millis) {
-                    LocalResult::Single(date) => date,
-                    _ => {
-                        return Err(gen_error_info(
-                            Position::new(interval, &data.context.flow),
-                            "Invalid milliseconds".to_string(),
-                        ))
-                    }
+                let LocalResult::Single(date) = Utc.timestamp_millis_opt(*millis) else {
+                    return Err(gen_error_info(
+                        Position::new(interval, &data.context.flow),
+                        "Invalid milliseconds".to_string(),
+                    ));
                 };
 
                 let duration = match time_type {
@@ -1036,117 +870,100 @@ impl PrimitiveObject {
         }
     }
 
+    #[allow(clippy::needless_pass_by_value)]
     fn add_time(
-        object: &mut PrimitiveObject,
-        args: &HashMap<String, Literal>,
-        _additional_info: &Option<HashMap<String, Literal>>,
+        object: &mut Self,
+        args: HashMap<String, Literal>,
+        _additional_info: Option<&HashMap<String, Literal>>,
         data: &mut Data,
         interval: Interval,
         _content_type: &str,
     ) -> Result<Literal, ErrorInfo> {
-        let usage = "add(time_in_seconds: int) => Time Object";
-
         let mut final_time = 0;
 
         if let Some(time_value) = object.value.get_mut("milliseconds") {
-            let time = Literal::get_value::<i64>(
+            let time = Literal::get_value::<i64, _>(
                 &time_value.primitive,
                 &data.context.flow,
                 interval,
-                "".to_string(),
+                String::new(),
             )?;
 
             final_time += *time;
         }
 
-        match args.get("arg0") {
-            Some(lit) if lit.primitive.get_type() == PrimitiveType::PrimitiveInt => {
-                let add_time = Literal::get_value::<i64>(
-                    &lit.primitive,
-                    &data.context.flow,
-                    interval,
-                    "".to_string(),
-                )?;
+        let [add_time]: [i64; 1] = get_int_args(
+            &args,
+            data,
+            interval,
+            String::new(),
+            "add(time_in_seconds: int) => Time Object",
+        )?;
+        final_time += add_time * 1000;
 
-                final_time += add_time * 1000;
+        object.value.insert(
+            "milliseconds".to_owned(),
+            PrimitiveInt::get_literal(final_time, interval),
+        );
+        let mut lit = Self::get_literal(object.value.clone(), interval);
+        lit.set_content_type("time");
 
-                object.value.insert(
-                    "milliseconds".to_owned(),
-                    PrimitiveInt::get_literal(final_time, interval),
-                );
-                let mut lit = PrimitiveObject::get_literal(&object.value, interval);
-                lit.set_content_type("time");
-
-                Ok(lit)
-            }
-            _ => Err(gen_error_info(
-                Position::new(interval, &data.context.flow),
-                format!("usage: {}", usage),
-            )),
-        }
+        Ok(lit)
     }
 
+    #[allow(clippy::needless_pass_by_value)]
     fn sub_time(
-        object: &mut PrimitiveObject,
-        args: &HashMap<String, Literal>,
-        _additional_info: &Option<HashMap<String, Literal>>,
+        object: &mut Self,
+        args: HashMap<String, Literal>,
+        _additional_info: Option<&HashMap<String, Literal>>,
         data: &mut Data,
         interval: Interval,
         _content_type: &str,
     ) -> Result<Literal, ErrorInfo> {
-        let usage = "sub(time_in_seconds: int) => Time Object";
-
         let mut final_time = 0;
 
         if let Some(time_value) = object.value.get_mut("milliseconds") {
-            let time = Literal::get_value::<i64>(
+            let time = Literal::get_value::<i64, _>(
                 &time_value.primitive,
                 &data.context.flow,
                 interval,
-                "".to_string(),
+                String::new(),
             )?;
 
             final_time += *time;
         }
 
-        match args.get("arg0") {
-            Some(lit) if lit.primitive.get_type() == PrimitiveType::PrimitiveInt => {
-                let add_time = Literal::get_value::<i64>(
-                    &lit.primitive,
-                    &data.context.flow,
-                    interval,
-                    "".to_string(),
-                )?;
+        let [add_time]: [i64; 1] = get_int_args(
+            &args,
+            data,
+            interval,
+            String::new(),
+            "sub(time_in_seconds: int) => Time Object",
+        )?;
+        final_time -= add_time * 1000;
 
-                final_time -= add_time * 1000;
+        object.value.insert(
+            "milliseconds".to_owned(),
+            PrimitiveInt::get_literal(final_time, interval),
+        );
+        let mut lit = Self::get_literal(object.value.clone(), interval);
+        lit.set_content_type("time");
 
-                object.value.insert(
-                    "milliseconds".to_owned(),
-                    PrimitiveInt::get_literal(final_time, interval),
-                );
-                let mut lit = PrimitiveObject::get_literal(&object.value, interval);
-                lit.set_content_type("time");
-
-                Ok(lit)
-            }
-            _ => Err(gen_error_info(
-                Position::new(interval, &data.context.flow),
-                format!("usage: {}", usage),
-            )),
-        }
+        Ok(lit)
     }
 
+    #[allow(clippy::needless_pass_by_value)]
     fn parse_date(
-        _object: &mut PrimitiveObject,
-        args: &HashMap<String, Literal>,
-        _additional_info: &Option<HashMap<String, Literal>>,
+        _object: &mut Self,
+        args: HashMap<String, Literal>,
+        _additional_info: Option<&HashMap<String, Literal>>,
         data: &mut Data,
         interval: Interval,
         _content_type: &str,
     ) -> Result<Literal, ErrorInfo> {
         match args.len() {
-            1 => tools_time::parse_rfc3339(args, data, interval),
-            len if len >= 2 => tools_time::pasre_from_str(args, data, interval),
+            1 => tools_time::parse_rfc3339(&args, data, interval),
+            len if len >= 2 => tools_time::pasre_from_str(&args, data, interval),
             _ => Err(gen_error_info(
                 Position::new(interval, &data.context.flow),
                 "usage: expect one ore two arguments :
@@ -1157,131 +974,106 @@ impl PrimitiveObject {
         }
     }
 
+    #[allow(clippy::needless_pass_by_value)]
     fn date_format(
-        object: &mut PrimitiveObject,
-        args: &HashMap<String, Literal>,
-        _additional_info: &Option<HashMap<String, Literal>>,
+        object: &mut Self,
+        args: HashMap<String, Literal>,
+        _additional_info: Option<&HashMap<String, Literal>>,
         data: &mut Data,
         interval: Interval,
         _content_type: &str,
     ) -> Result<Literal, ErrorInfo> {
         let usage = "Time().format(format: String)";
 
-        let offset = if let Some(offset) = object.value.get("offset") {
-            Literal::get_value::<i64>(
+        let offset = object.value.get("offset").and_then(|offset| {
+            Literal::get_value::<i64, _>(
                 &offset.primitive,
                 &data.context.flow,
                 interval,
-                "".to_string(),
+                String::new(),
             )
             .ok()
-        } else {
-            None
+        });
+
+        let invalid_time = |what: &str| {
+            gen_error_info(
+                Position::new(interval, &data.context.flow),
+                format!("invalid {what}"),
+            )
         };
 
-        match (
-            object.value.get("milliseconds"),
-            object.value.get("timezone"),
-            offset,
-        ) {
-            (Some(lit), None, None) if lit.primitive.get_type() == PrimitiveType::PrimitiveInt => {
-                let millis = Literal::get_value::<i64>(
-                    &lit.primitive,
-                    &data.context.flow,
-                    interval,
-                    "".to_string(),
-                )?;
+        if let Some(lit) = object.value.get("milliseconds")
+            && lit.primitive.get_type() == PrimitiveType::PrimitiveInt
+        {
+            let millis = Literal::get_value::<i64, _>(
+                &lit.primitive,
+                &data.context.flow,
+                interval,
+                String::new(),
+            )?;
+            let formatted_date = match (object.value.get("timezone"), offset) {
+                (None, None) => {
+                    let date: DateTime<Utc> = Utc
+                        .timestamp_millis_opt(*millis)
+                        .earliest()
+                        .ok_or_else(|| invalid_time("milliseconds"))?;
 
-                let date: DateTime<Utc> = Utc.timestamp_millis_opt(*millis).unwrap();
+                    tools_time::format_date(&args, &date, data, interval, true)?
+                }
+                (Some(timezone), _) => {
+                    let tz = Literal::get_value::<String, _>(
+                        &timezone.primitive,
+                        &data.context.flow,
+                        interval,
+                        String::new(),
+                    )
+                    .and_then(|tz_string| {
+                        tz_string.parse::<Tz>().map_err(|_| {
+                            gen_error_info(
+                                Position::new(interval, &data.context.flow),
+                                format!("invalid timezone {tz_string}"),
+                            )
+                        })
+                    })?;
 
-                let formatted_date = tools_time::format_date(args, date, data, interval, true)?;
+                    let local_date = Utc
+                        .timestamp_millis_opt(*millis)
+                        .earliest()
+                        .ok_or_else(|| invalid_time("milliseconds"))?;
+                    let date = UTC
+                        .from_local_datetime(&local_date.naive_local())
+                        .earliest()
+                        .ok_or_else(|| invalid_time("milliseconds"))?
+                        .with_timezone(&tz);
+                    tools_time::format_date(&args, &date, data, interval, false)?
+                }
+                (None, Some(offset)) => {
+                    let date: DateTime<FixedOffset> =
+                        FixedOffset::east_opt(i32::try_from(*offset)?)
+                            .ok_or_else(|| invalid_time("offset"))?
+                            .timestamp_millis_opt(*millis)
+                            .earliest()
+                            .ok_or_else(|| invalid_time("milliseconds"))?;
 
-                Ok(PrimitiveString::get_literal(&formatted_date, interval))
-            }
-            (Some(lit), Some(timezone), _)
-                if lit.primitive.get_type() == PrimitiveType::PrimitiveInt =>
-            {
-                let millis = Literal::get_value::<i64>(
-                    &lit.primitive,
-                    &data.context.flow,
-                    interval,
-                    "".to_string(),
-                )?;
-
-                let tz_string = Literal::get_value::<String>(
-                    &timezone.primitive,
-                    &data.context.flow,
-                    interval,
-                    "".to_string(),
-                )
-                .ok();
-
-                let formatted_date = match tz_string {
-                    Some(tz_string) => {
-                        let local_date = Utc.timestamp_millis_opt(*millis).unwrap();
-
-                        match tz_string.parse::<Tz>() {
-                            Ok(tz) => match UTC.from_local_datetime(&local_date.naive_local()) {
-                                LocalResult::Single(date) | LocalResult::Ambiguous(date, _) => {
-                                    let date = date.with_timezone(&tz);
-
-                                    tools_time::format_date(args, date, data, interval, false)?
-                                }
-                                LocalResult::None => tools_time::format_date(
-                                    args, local_date, data, interval, false,
-                                )?,
-                            },
-                            Err(_) => {
-                                return Err(gen_error_info(
-                                    Position::new(interval, &data.context.flow),
-                                    format!("invalid timezone {}", tz_string),
-                                ));
-                            }
-                        }
-                    }
-                    _ => {
-                        let date = Utc.timestamp_millis_opt(*millis).unwrap();
-
-                        tools_time::format_date(args, date, data, interval, false)?
-                    }
-                };
-
-                Ok(PrimitiveString::get_literal(&formatted_date, interval))
-            }
-
-            (Some(lit), None, Some(offset))
-                if lit.primitive.get_type() == PrimitiveType::PrimitiveInt =>
-            {
-                let millis = Literal::get_value::<i64>(
-                    &lit.primitive,
-                    &data.context.flow,
-                    interval,
-                    "".to_string(),
-                )?;
-
-                let date: DateTime<FixedOffset> = FixedOffset::east_opt(*offset as i32)
-                    .unwrap()
-                    .timestamp_millis_opt(*millis)
-                    .unwrap();
-
-                let formatted_date = tools_time::format_date(args, date, data, interval, false)?;
-
-                Ok(PrimitiveString::get_literal(&formatted_date, interval))
-            }
-
-            _ => Err(gen_error_info(
-                Position::new(interval, &data.context.flow),
-                format!("usage: {}", usage),
-            )),
+                    tools_time::format_date(&args, &date, data, interval, false)?
+                }
+            };
+            return Ok(PrimitiveString::get_literal(&formatted_date, interval));
         }
+
+        Err(gen_error_info(
+            Position::new(interval, &data.context.flow),
+            format!("usage: {usage}"),
+        ))
     }
 }
 
 impl PrimitiveObject {
+    #[allow(clippy::needless_pass_by_value)]
     fn jwt_sign(
-        object: &mut PrimitiveObject,
-        args: &HashMap<String, Literal>,
-        _additional_info: &Option<HashMap<String, Literal>>,
+        object: &mut Self,
+        args: HashMap<String, Literal>,
+        _additional_info: Option<&HashMap<String, Literal>>,
         data: &mut Data,
         interval: Interval,
         _content_type: &str,
@@ -1312,11 +1104,11 @@ impl PrimitiveObject {
 
         let key = match args.get("arg1") {
             Some(key) if key.primitive.get_type() == PrimitiveType::PrimitiveString => {
-                let key = Literal::get_value::<String>(
+                let key = Literal::get_value::<String, _>(
                     &key.primitive,
                     &data.context.flow,
                     interval,
-                    ERROR_JWT_SIGN_SECRET.to_string(),
+                    ERROR_JWT_SIGN_SECRET,
                 )?;
 
                 jsonwebtoken::EncodingKey::from_secret(key.as_ref())
@@ -1342,20 +1134,21 @@ impl PrimitiveObject {
         }
     }
 
+    #[allow(clippy::needless_pass_by_value)]
     fn jwt_decode(
-        object: &mut PrimitiveObject,
-        args: &HashMap<String, Literal>,
-        _additional_info: &Option<HashMap<String, Literal>>,
+        object: &mut Self,
+        args: HashMap<String, Literal>,
+        _additional_info: Option<&HashMap<String, Literal>>,
         data: &mut Data,
         interval: Interval,
         _content_type: &str,
     ) -> Result<Literal, ErrorInfo> {
         let token = match object.value.get("jwt") {
-            Some(literal) => Literal::get_value::<String>(
+            Some(literal) => Literal::get_value::<String, _>(
                 &literal.primitive,
                 &data.context.flow,
                 interval,
-                ERROR_JWT_TOKEN.to_owned(),
+                ERROR_JWT_TOKEN,
             )?,
             None => {
                 return Err(gen_error_info(
@@ -1379,11 +1172,11 @@ impl PrimitiveObject {
 
         let key = match args.get("arg1") {
             Some(key) if key.primitive.get_type() == PrimitiveType::PrimitiveString => {
-                let key = Literal::get_value::<String>(
+                let key = Literal::get_value::<String, _>(
                     &key.primitive,
                     &data.context.flow,
                     interval,
-                    ERROR_JWT_DECODE_SECRET.to_owned(),
+                    ERROR_JWT_DECODE_SECRET,
                 )?;
 
                 jsonwebtoken::DecodingKey::from_secret(key.as_ref())
@@ -1402,7 +1195,7 @@ impl PrimitiveObject {
             &jsonwebtoken::Validation::new(algo),
         ) {
             Ok(token_message) => {
-                tools_jwt::token_data_to_literal(token_message, &data.context.flow, interval)
+                tools_jwt::token_data_to_literal(&token_message, &data.context.flow, interval)
             }
             Err(e) => Err(gen_error_info(
                 Position::new(interval, &data.context.flow),
@@ -1411,10 +1204,11 @@ impl PrimitiveObject {
         }
     }
 
+    #[allow(clippy::needless_pass_by_value)]
     fn jwt_verity(
-        object: &mut PrimitiveObject,
-        args: &HashMap<String, Literal>,
-        _additional_info: &Option<HashMap<String, Literal>>,
+        object: &mut Self,
+        args: HashMap<String, Literal>,
+        _additional_info: Option<&HashMap<String, Literal>>,
         data: &mut Data,
         interval: Interval,
         _content_type: &str,
@@ -1422,11 +1216,11 @@ impl PrimitiveObject {
         let mut validation = jsonwebtoken::Validation::default();
 
         let token = match object.value.get("jwt") {
-            Some(literal) => Literal::get_value::<String>(
+            Some(literal) => Literal::get_value::<String, _>(
                 &literal.primitive,
                 &data.context.flow,
                 interval,
-                ERROR_JWT_TOKEN.to_owned(),
+                ERROR_JWT_TOKEN,
             )?,
             None => {
                 return Err(gen_error_info(
@@ -1438,7 +1232,7 @@ impl PrimitiveObject {
 
         match args.get("arg0") {
             Some(lit) => {
-                tools_jwt::get_validation(lit, &data.context.flow, interval, &mut validation)?
+                tools_jwt::get_validation(lit, &data.context.flow, interval, &mut validation)?;
             }
             None => {
                 return Err(gen_error_info(
@@ -1462,15 +1256,15 @@ impl PrimitiveObject {
                     ERROR_JWT_VALIDATION_ALGO.to_string(),
                 ));
             }
-        };
+        }
 
         let key = match args.get("arg2") {
             Some(key) if key.primitive.get_type() == PrimitiveType::PrimitiveString => {
-                let key = Literal::get_value::<String>(
+                let key = Literal::get_value::<String, _>(
                     &key.primitive,
                     &data.context.flow,
                     interval,
-                    ERROR_JWT_SECRET.to_owned(),
+                    ERROR_JWT_SECRET,
                 )?;
 
                 jsonwebtoken::DecodingKey::from_secret(key.as_ref())
@@ -1485,7 +1279,7 @@ impl PrimitiveObject {
 
         match jsonwebtoken::decode::<serde_json::Value>(token, &key, &validation) {
             Ok(token_message) => {
-                tools_jwt::token_data_to_literal(token_message, &data.context.flow, interval)
+                tools_jwt::token_data_to_literal(&token_message, &data.context.flow, interval)
             }
             Err(e) => Err(gen_error_info(
                 Position::new(interval, &data.context.flow),
@@ -1496,10 +1290,11 @@ impl PrimitiveObject {
 }
 
 impl PrimitiveObject {
+    #[allow(clippy::needless_pass_by_value)]
     fn create_hmac(
-        object: &mut PrimitiveObject,
-        args: &HashMap<String, Literal>,
-        _additional_info: &Option<HashMap<String, Literal>>,
+        object: &mut Self,
+        args: HashMap<String, Literal>,
+        _additional_info: Option<&HashMap<String, Literal>>,
         data: &mut Data,
         interval: Interval,
         _content_type: &str,
@@ -1507,11 +1302,11 @@ impl PrimitiveObject {
         let flow_name = &data.context.flow;
 
         let data = match object.value.get("value") {
-            Some(literal) => Literal::get_value::<String>(
+            Some(literal) => Literal::get_value::<String, _>(
                 &literal.primitive,
                 flow_name,
                 interval,
-                ERROR_HASH.to_owned(),
+                ERROR_HASH,
             )?,
             None => {
                 return Err(gen_error_info(
@@ -1523,11 +1318,11 @@ impl PrimitiveObject {
 
         let algo = match args.get("arg0") {
             Some(algo) if algo.primitive.get_type() == PrimitiveType::PrimitiveString => {
-                let algo = Literal::get_value::<String>(
+                let algo = Literal::get_value::<String, _>(
                     &algo.primitive,
                     flow_name,
                     interval,
-                    ERROR_HASH_ALGO.to_owned(),
+                    ERROR_HASH_ALGO,
                 )?;
                 tools_crypto::get_hash_algorithm(algo, flow_name, interval)?
             }
@@ -1541,11 +1336,11 @@ impl PrimitiveObject {
 
         let key = match args.get("arg1") {
             Some(algo) if algo.primitive.get_type() == PrimitiveType::PrimitiveString => {
-                let secret = Literal::get_value::<String>(
+                let secret = Literal::get_value::<String, _>(
                     &algo.primitive,
                     flow_name,
                     interval,
-                    ERROR_HMAC_KEY.to_owned(),
+                    ERROR_HMAC_KEY,
                 )?;
                 openssl::pkey::PKey::hmac(secret.as_bytes()).unwrap()
             }
@@ -1566,30 +1361,31 @@ impl PrimitiveObject {
                     .sign_to_vec()
                     .unwrap()
                     .iter()
-                    .map(|val| PrimitiveInt::get_literal(*val as i64, interval))
+                    .map(|val| PrimitiveInt::get_literal(i64::from(*val), interval))
                     .collect::<Vec<Literal>>();
 
                 let mut map = HashMap::new();
                 map.insert(
                     "hash".to_string(),
-                    PrimitiveArray::get_literal(&vec, interval),
+                    PrimitiveArray::get_literal(vec, interval),
                 );
 
-                let mut lit = PrimitiveObject::get_literal(&map, interval);
+                let mut lit = Self::get_literal(map, interval);
                 lit.set_content_type("crypto");
                 Ok(lit)
             }
             Err(e) => Err(gen_error_info(
                 Position::new(interval, flow_name),
-                format!("{}", e),
+                format!("{e}"),
             )),
         }
     }
 
+    #[allow(clippy::needless_pass_by_value)]
     fn create_hash(
-        object: &mut PrimitiveObject,
-        args: &HashMap<String, Literal>,
-        _additional_info: &Option<HashMap<String, Literal>>,
+        object: &mut Self,
+        args: HashMap<String, Literal>,
+        _additional_info: Option<&HashMap<String, Literal>>,
         data: &mut Data,
         interval: Interval,
         _content_type: &str,
@@ -1597,11 +1393,11 @@ impl PrimitiveObject {
         let flow_name = &data.context.flow;
 
         let data = match object.value.get("value") {
-            Some(literal) => Literal::get_value::<String>(
+            Some(literal) => Literal::get_value::<String, _>(
                 &literal.primitive,
                 &data.context.flow,
                 interval,
-                ERROR_HASH.to_owned(),
+                ERROR_HASH,
             )?,
             None => {
                 return Err(gen_error_info(
@@ -1613,11 +1409,11 @@ impl PrimitiveObject {
 
         let algo = match args.get("arg0") {
             Some(algo) if algo.primitive.get_type() == PrimitiveType::PrimitiveString => {
-                let algo = Literal::get_value::<String>(
+                let algo = Literal::get_value::<String, _>(
                     &algo.primitive,
                     flow_name,
                     interval,
-                    ERROR_HASH_ALGO.to_owned(),
+                    ERROR_HASH_ALGO,
                 )?;
                 tools_crypto::get_hash_algorithm(algo, flow_name, interval)?
             }
@@ -1632,58 +1428,53 @@ impl PrimitiveObject {
         match openssl::hash::hash(algo, data.as_bytes()) {
             Ok(digest_bytes) => {
                 let vec = digest_bytes
-                    .to_vec()
                     .iter()
-                    .map(|val| PrimitiveInt::get_literal(*val as i64, interval))
+                    .map(|val| PrimitiveInt::get_literal(i64::from(*val), interval))
                     .collect::<Vec<Literal>>();
 
-                let mut map = HashMap::new();
-                map.insert(
+                let map = HashMap::from([(
                     "hash".to_string(),
-                    PrimitiveArray::get_literal(&vec, interval),
-                );
+                    PrimitiveArray::get_literal(vec, interval),
+                )]);
 
-                let mut lit = PrimitiveObject::get_literal(&map, interval);
-                lit.set_content_type("crypto");
-                Ok(lit)
+                Ok(Self::get_literal_with_type("crypto", map, interval))
             }
             Err(e) => Err(gen_error_info(
                 Position::new(interval, flow_name),
-                format!("{}", e),
+                format!("{e}"),
             )),
         }
     }
 
+    #[allow(clippy::needless_pass_by_value)]
     fn digest(
-        object: &mut PrimitiveObject,
-        args: &HashMap<String, Literal>,
-        _additional_info: &Option<HashMap<String, Literal>>,
+        object: &mut Self,
+        args: HashMap<String, Literal>,
+        _additional_info: Option<&HashMap<String, Literal>>,
         data: &mut Data,
         interval: Interval,
         _content_type: &str,
     ) -> Result<Literal, ErrorInfo> {
-        let vec = match object.value.get("hash") {
-            Some(literal) => Literal::get_value::<Vec<Literal>>(
-                &literal.primitive,
-                &data.context.flow,
-                interval,
-                ERROR_DIGEST.to_owned(),
-            )?,
-            None => {
-                return Err(gen_error_info(
-                    Position::new(interval, &data.context.flow),
-                    ERROR_DIGEST.to_string(),
-                ));
-            }
+        let Some(literal) = object.value.get("hash") else {
+            return Err(gen_error_info(
+                Position::new(interval, &data.context.flow),
+                ERROR_DIGEST.to_string(),
+            ));
         };
+        let vec = Literal::get_value::<Vec<Literal>, _>(
+            &literal.primitive,
+            &data.context.flow,
+            interval,
+            ERROR_DIGEST,
+        )?;
 
         let algo = match args.get("arg0") {
             Some(algo) if algo.primitive.get_type() == PrimitiveType::PrimitiveString => {
-                Literal::get_value::<String>(
+                Literal::get_value::<String, _>(
                     &algo.primitive,
                     &data.context.flow,
                     interval,
-                    ERROR_DIGEST_ALGO.to_owned(),
+                    ERROR_DIGEST_ALGO,
                 )?
             }
             _ => {
@@ -1694,15 +1485,25 @@ impl PrimitiveObject {
             }
         };
 
-        let mut digest_data = vec![];
-        for value in vec.iter() {
-            digest_data.push(*Literal::get_value::<i64>(
-                &value.primitive,
-                &data.context.flow,
-                interval,
-                "ERROR_hash_TOKEN".to_owned(),
-            )? as u8);
-        }
+        let digest_data = vec
+            .iter()
+            .map(|value| {
+                // The hash is stored as a vec of u8 so this cast should never fail
+                Literal::get_value::<i64, _>(
+                    &value.primitive,
+                    &data.context.flow,
+                    interval,
+                    "ERROR_hash_TOKEN",
+                )?
+                .to_u8()
+                .ok_or_else(|| {
+                    gen_error_info(
+                        Position::new(interval, &data.context.flow),
+                        "ERROR_hash_TOKEN".to_string(),
+                    )
+                })
+            })
+            .collect::<Result<Vec<_>, _>>()?;
 
         let value = tools_crypto::digest_data(algo, &digest_data, &data.context.flow, interval)?;
 
@@ -1712,9 +1513,9 @@ impl PrimitiveObject {
 
 impl PrimitiveObject {
     fn base64_encode(
-        object: &mut PrimitiveObject,
-        _args: &HashMap<String, Literal>,
-        _additional_info: &Option<HashMap<String, Literal>>,
+        object: &mut Self,
+        _args: HashMap<String, Literal>,
+        _additional_info: Option<&HashMap<String, Literal>>,
         data: &mut Data,
         interval: Interval,
         _content_type: &str,
@@ -1726,7 +1527,7 @@ impl PrimitiveObject {
             _ => {
                 return Err(gen_error_info(
                     Position::new(interval, &data.context.flow),
-                    format!("usage: {}", usage),
+                    format!("usage: {usage}"),
                 ));
             }
         };
@@ -1737,9 +1538,9 @@ impl PrimitiveObject {
     }
 
     fn base64_decode(
-        object: &mut PrimitiveObject,
-        _args: &HashMap<String, Literal>,
-        _additional_info: &Option<HashMap<String, Literal>>,
+        object: &mut Self,
+        _args: HashMap<String, Literal>,
+        _additional_info: Option<&HashMap<String, Literal>>,
         data: &mut Data,
         interval: Interval,
         _content_type: &str,
@@ -1751,7 +1552,7 @@ impl PrimitiveObject {
             _ => {
                 return Err(gen_error_info(
                     Position::new(interval, &data.context.flow),
-                    format!("usage: {}", usage),
+                    format!("usage: {usage}"),
                 ));
             }
         };
@@ -1761,7 +1562,7 @@ impl PrimitiveObject {
             Err(_) => {
                 return Err(gen_error_info(
                     Position::new(interval, &data.context.flow),
-                    format!("Base64 invalid value: {}, can't be decode", string),
+                    format!("Base64 invalid value: {string}, can't be decode"),
                 ));
             }
         };
@@ -1772,9 +1573,9 @@ impl PrimitiveObject {
 
 impl PrimitiveObject {
     fn hex_encode(
-        object: &mut PrimitiveObject,
-        _args: &HashMap<String, Literal>,
-        _additional_info: &Option<HashMap<String, Literal>>,
+        object: &mut Self,
+        _args: HashMap<String, Literal>,
+        _additional_info: Option<&HashMap<String, Literal>>,
         data: &mut Data,
         interval: Interval,
         _content_type: &str,
@@ -1786,7 +1587,7 @@ impl PrimitiveObject {
             _ => {
                 return Err(gen_error_info(
                     Position::new(interval, &data.context.flow),
-                    format!("usage: {}", usage),
+                    format!("usage: {usage}"),
                 ));
             }
         };
@@ -1797,31 +1598,29 @@ impl PrimitiveObject {
     }
 
     fn hex_decode(
-        object: &mut PrimitiveObject,
-        _args: &HashMap<String, Literal>,
-        _additional_info: &Option<HashMap<String, Literal>>,
+        object: &mut Self,
+        _args: HashMap<String, Literal>,
+        _additional_info: Option<&HashMap<String, Literal>>,
         data: &mut Data,
         interval: Interval,
         _content_type: &str,
     ) -> Result<Literal, ErrorInfo> {
         let usage = "Hex(\"...\").decode() => String";
 
-        let string = match object.value.get("string") {
-            Some(lit) => lit.primitive.to_string(),
-            _ => {
-                return Err(gen_error_info(
-                    Position::new(interval, &data.context.flow),
-                    format!("usage: {}", usage),
-                ));
-            }
+        let Some(literal) = object.value.get("string") else {
+            return Err(gen_error_info(
+                Position::new(interval, &data.context.flow),
+                format!("usage: {usage}"),
+            ));
         };
+        let string = literal.primitive.to_string();
 
         let result = match hex::decode(string.as_bytes()) {
             Ok(buf) => format!("{}", String::from_utf8_lossy(&buf)),
             Err(_) => {
                 return Err(gen_error_info(
                     Position::new(interval, &data.context.flow),
-                    format!("Hex invalid value: {}, can't be decode", string),
+                    format!("Hex invalid value: {string}, can't be decode"),
                 ));
             }
         };
@@ -1831,10 +1630,11 @@ impl PrimitiveObject {
 }
 
 impl PrimitiveObject {
+    #[allow(clippy::needless_pass_by_value)]
     fn get_type(
-        _object: &mut PrimitiveObject,
-        args: &HashMap<String, Literal>,
-        _additional_info: &Option<HashMap<String, Literal>>,
+        _object: &mut Self,
+        args: HashMap<String, Literal>,
+        _additional_info: Option<&HashMap<String, Literal>>,
         data: &mut Data,
         interval: Interval,
         content_type: &str,
@@ -1844,29 +1644,25 @@ impl PrimitiveObject {
         if !args.is_empty() {
             return Err(gen_error_info(
                 Position::new(interval, &data.context.flow),
-                format!("usage: {}", usage),
+                format!("usage: {usage}"),
             ));
         }
 
         Ok(PrimitiveString::get_literal(content_type, interval))
     }
 
+    #[allow(clippy::needless_pass_by_value)]
     fn get_content(
-        object: &mut PrimitiveObject,
-        args: &HashMap<String, Literal>,
-        _additional_info: &Option<HashMap<String, Literal>>,
+        object: &mut Self,
+        args: HashMap<String, Literal>,
+        _additional_info: Option<&HashMap<String, Literal>>,
         data: &mut Data,
         interval: Interval,
         content_type: &str,
     ) -> Result<Literal, ErrorInfo> {
         let usage = "get_content() => object";
 
-        if !args.is_empty() {
-            return Err(gen_error_info(
-                Position::new(interval, &data.context.flow),
-                format!("usage: {}", usage),
-            ));
-        }
+        require_n_args(0, &args, interval, data, usage)?;
 
         Ok(Literal {
             content_type: content_type.to_owned(),
@@ -1877,10 +1673,11 @@ impl PrimitiveObject {
         })
     }
 
+    #[allow(clippy::needless_pass_by_value)]
     fn is_email(
-        object: &mut PrimitiveObject,
-        args: &HashMap<String, Literal>,
-        _additional_info: &Option<HashMap<String, Literal>>,
+        object: &mut Self,
+        args: HashMap<String, Literal>,
+        _additional_info: Option<&HashMap<String, Literal>>,
         data: &mut Data,
         interval: Interval,
         _content_type: &str,
@@ -1892,24 +1689,20 @@ impl PrimitiveObject {
             _ => return Ok(PrimitiveBoolean::get_literal(false, interval)),
         };
 
-        if !args.is_empty() {
-            return Err(gen_error_info(
-                Position::new(interval, &data.context.flow),
-                format!("usage: {}", usage),
-            ));
-        }
+        require_n_args(0, &args, interval, data, usage)?;
 
-        let email_regex = Regex::new(r"^[^@]+@[^@]+\.[^@]+$").unwrap();
+        let email_regex = LazyLock::force(&EMAIL_REGEX);
 
         let lit = PrimitiveBoolean::get_literal(email_regex.is_match(&text), interval);
 
         Ok(lit)
     }
 
+    #[allow(clippy::unnecessary_wraps)]
     fn is_secure(
-        _object: &mut PrimitiveObject,
-        _args: &HashMap<String, Literal>,
-        _additional_info: &Option<HashMap<String, Literal>>,
+        _object: &mut Self,
+        _args: HashMap<String, Literal>,
+        _additional_info: Option<&HashMap<String, Literal>>,
         data: &mut Data,
         interval: Interval,
         _content_type: &str,
@@ -1919,10 +1712,11 @@ impl PrimitiveObject {
         Ok(lit)
     }
 
+    #[allow(clippy::needless_pass_by_value)]
     fn match_args(
-        object: &mut PrimitiveObject,
-        args: &HashMap<String, Literal>,
-        _additional_info: &Option<HashMap<String, Literal>>,
+        object: &mut Self,
+        args: HashMap<String, Literal>,
+        _additional_info: Option<&HashMap<String, Literal>>,
         data: &mut Data,
         interval: Interval,
         _content_type: &str,
@@ -1937,22 +1731,22 @@ impl PrimitiveObject {
         if args.is_empty() {
             return Err(gen_error_info(
                 Position::new(interval, &data.context.flow),
-                format!("usage: {}", usage),
+                format!("usage: {usage}"),
             ));
         }
 
-        let is_match = args.iter().find(|(_name, arg)| match_obj(lit, arg));
+        let is_match = args
+            .iter()
+            .find_map(|(_, arg)| match_obj(lit, arg).then(|| arg.clone()));
 
-        match is_match {
-            Some((_, lit)) => Ok(lit.to_owned()),
-            None => Ok(PrimitiveNull::get_literal(interval)),
-        }
+        Ok(is_match.unwrap_or_else(|| PrimitiveNull::get_literal(interval)))
     }
 
+    #[allow(clippy::needless_pass_by_value)]
     fn match_array(
-        object: &mut PrimitiveObject,
-        args: &HashMap<String, Literal>,
-        _additional_info: &Option<HashMap<String, Literal>>,
+        object: &mut Self,
+        args: HashMap<String, Literal>,
+        _additional_info: Option<&HashMap<String, Literal>>,
         data: &mut Data,
         interval: Interval,
         _content_type: &str,
@@ -1964,154 +1758,101 @@ impl PrimitiveObject {
             _ => return Ok(PrimitiveNull::get_literal(interval)),
         };
 
-        let array = match args.get("arg0") {
-            Some(lit) => Literal::get_value::<Vec<Literal>>(
-                &lit.primitive,
-                &data.context.flow,
-                interval,
-                format!("expect Array value as argument usage: {}", usage),
-            )?,
-            None => {
-                return Err(gen_error_info(
-                    Position::new(interval, &data.context.flow),
-                    format!("expect Array value as argument usage: {}", usage),
-                ));
-            }
-        };
+        let [array]: [&Vec<Literal>; 1] = get_args(
+            &args,
+            data,
+            interval,
+            format!("expect Array value as argument usage: {usage}"),
+            usage,
+        )?;
 
-        let is_match = array.iter().find(|&arg| match_obj(lit, arg));
+        let is_match = array
+            .iter()
+            .find_map(|arg| match_obj(lit, arg).then(|| arg.clone()));
 
-        match is_match {
-            Some(lit) => Ok(lit.to_owned()),
-            None => Ok(PrimitiveNull::get_literal(interval)),
-        }
+        Ok(is_match.unwrap_or_else(|| PrimitiveNull::get_literal(interval)))
     }
 }
 
 impl PrimitiveObject {
+    #[allow(clippy::needless_pass_by_value)]
     fn is_number(
-        _object: &mut PrimitiveObject,
-        args: &HashMap<String, Literal>,
-        _additional_info: &Option<HashMap<String, Literal>>,
+        _object: &mut Self,
+        args: HashMap<String, Literal>,
+        _additional_info: Option<&HashMap<String, Literal>>,
         data: &mut Data,
         interval: Interval,
         _content_type: &str,
     ) -> Result<Literal, ErrorInfo> {
-        let usage = "is_number() => boolean";
-
-        if !args.is_empty() {
-            return Err(gen_error_info(
-                Position::new(interval, &data.context.flow),
-                format!("usage: {}", usage),
-            ));
-        }
+        require_n_args(0, &args, interval, data, "is_number() => boolean")?;
 
         Ok(PrimitiveBoolean::get_literal(false, interval))
     }
 
+    #[allow(clippy::needless_pass_by_value)]
     fn is_int(
-        _object: &mut PrimitiveObject,
-        args: &HashMap<String, Literal>,
-        _additional_info: &Option<HashMap<String, Literal>>,
+        _object: &mut Self,
+        args: HashMap<String, Literal>,
+        _additional_info: Option<&HashMap<String, Literal>>,
         data: &mut Data,
         interval: Interval,
         _content_type: &str,
     ) -> Result<Literal, ErrorInfo> {
-        let usage = "is_int() => boolean";
-
-        if !args.is_empty() {
-            return Err(gen_error_info(
-                Position::new(interval, &data.context.flow),
-                format!("usage: {}", usage),
-            ));
-        }
+        require_n_args(0, &args, interval, data, "is_int() => boolean")?;
 
         Ok(PrimitiveBoolean::get_literal(false, interval))
     }
 
+    #[allow(clippy::needless_pass_by_value)]
     fn is_float(
-        _object: &mut PrimitiveObject,
-        args: &HashMap<String, Literal>,
-        _additional_info: &Option<HashMap<String, Literal>>,
+        _object: &mut Self,
+        args: HashMap<String, Literal>,
+        _additional_info: Option<&HashMap<String, Literal>>,
         data: &mut Data,
         interval: Interval,
         _content_type: &str,
     ) -> Result<Literal, ErrorInfo> {
-        let usage = "is_float() => boolean";
-
-        if !args.is_empty() {
-            return Err(gen_error_info(
-                Position::new(interval, &data.context.flow),
-                format!("usage: {}", usage),
-            ));
-        }
+        require_n_args(0, &args, interval, data, "is_float() => boolean")?;
 
         Ok(PrimitiveBoolean::get_literal(false, interval))
     }
 
+    #[allow(clippy::needless_pass_by_value)]
     fn type_of(
-        _object: &mut PrimitiveObject,
-        args: &HashMap<String, Literal>,
-        _additional_info: &Option<HashMap<String, Literal>>,
+        _object: &mut Self,
+        args: HashMap<String, Literal>,
+        _additional_info: Option<&HashMap<String, Literal>>,
         data: &mut Data,
         interval: Interval,
         _content_type: &str,
     ) -> Result<Literal, ErrorInfo> {
-        let usage = "type_of() => string";
-
-        if !args.is_empty() {
-            return Err(gen_error_info(
-                Position::new(interval, &data.context.flow),
-                format!("usage: {}", usage),
-            ));
-        }
+        require_n_args(0, &args, interval, data, "type_of() => string")?;
 
         Ok(PrimitiveString::get_literal("object", interval))
     }
 
+    #[allow(clippy::needless_pass_by_value)]
     fn get_info(
-        _object: &mut PrimitiveObject,
-        args: &HashMap<String, Literal>,
-        additional_info: &Option<HashMap<String, Literal>>,
+        _object: &mut Self,
+        args: HashMap<String, Literal>,
+        additional_info: Option<&HashMap<String, Literal>>,
         data: &mut Data,
         interval: Interval,
         _content_type: &str,
     ) -> Result<Literal, ErrorInfo> {
-        literal::get_info(args, additional_info, interval, data)
+        literal::get_info(&args, additional_info, interval, data)
     }
 
-    fn is_error(
-        _object: &mut PrimitiveObject,
-        _args: &HashMap<String, Literal>,
-        additional_info: &Option<HashMap<String, Literal>>,
-        _data: &mut Data,
-        interval: Interval,
-        _content_type: &str,
-    ) -> Result<Literal, ErrorInfo> {
-        match additional_info {
-            Some(map) if map.contains_key("error") => {
-                Ok(PrimitiveBoolean::get_literal(true, interval))
-            }
-            _ => Ok(PrimitiveBoolean::get_literal(false, interval)),
-        }
-    }
-
-    fn to_xml(
-        object: &mut PrimitiveObject,
-        args: &HashMap<String, Literal>,
-        _additional_info: &Option<HashMap<String, Literal>>,
+    #[allow(clippy::needless_pass_by_value)]
+    fn convert_to_xml(
+        object: &mut Self,
+        args: HashMap<String, Literal>,
+        _additional_info: Option<&HashMap<String, Literal>>,
         data: &mut Data,
         interval: Interval,
         _content_type: &str,
     ) -> Result<Literal, ErrorInfo> {
-        let usage = "to_xml() => string";
-
-        if !args.is_empty() {
-            return Err(gen_error_info(
-                Position::new(interval, &data.context.flow),
-                format!("usage: {}", usage),
-            ));
-        }
+        require_n_args(0, &args, interval, data, "to_xml() => string")?;
 
         match serde_xml_rs::to_string(&object.to_json()) {
             Ok(string) => Ok(PrimitiveString::get_literal(&string, interval)),
@@ -2122,285 +1863,201 @@ impl PrimitiveObject {
         }
     }
 
-    fn to_yaml(
-        object: &mut PrimitiveObject,
-        args: &HashMap<String, Literal>,
-        _additional_info: &Option<HashMap<String, Literal>>,
+    #[allow(clippy::needless_pass_by_value)]
+    fn convert_to_yaml(
+        object: &mut Self,
+        args: HashMap<String, Literal>,
+        _additional_info: Option<&HashMap<String, Literal>>,
         data: &mut Data,
         interval: Interval,
         _content_type: &str,
     ) -> Result<Literal, ErrorInfo> {
-        let usage = "to_yaml() => string";
+        require_n_args(0, &args, interval, data, "to_yaml() => string")?;
 
-        if !args.is_empty() {
+        let Ok(string) = serde_yml::to_string(&object.to_json()) else {
             return Err(gen_error_info(
-                Position::new(interval, &data.context.flow),
-                format!("usage: {}", usage),
-            ));
-        }
-
-        match serde_yaml::to_string(&object.to_json()) {
-            Ok(string) => Ok(PrimitiveString::get_literal(&string, interval)),
-            Err(_) => Err(gen_error_info(
                 Position::new(interval, &data.context.flow),
                 "Object can not be converted to yaml".to_string(),
-            )),
-        }
+            ));
+        };
+        Ok(PrimitiveString::get_literal(&string, interval))
     }
 
-    fn to_string(
-        object: &mut PrimitiveObject,
-        args: &HashMap<String, Literal>,
-        _additional_info: &Option<HashMap<String, Literal>>,
+    #[allow(clippy::needless_pass_by_value)]
+    fn convert_to_string(
+        object: &mut Self,
+        args: HashMap<String, Literal>,
+        _additional_info: Option<&HashMap<String, Literal>>,
         data: &mut Data,
         interval: Interval,
         _content_type: &str,
     ) -> Result<Literal, ErrorInfo> {
-        let usage = "to_string() => string";
-
-        if !args.is_empty() {
-            return Err(gen_error_info(
-                Position::new(interval, &data.context.flow),
-                format!("usage: {}", usage),
-            ));
-        }
+        require_n_args(0, &args, interval, data, "to_string() => string")?;
 
         Ok(PrimitiveString::get_literal(&object.to_string(), interval))
     }
 
+    #[allow(clippy::needless_pass_by_value)]
     fn contains(
-        object: &mut PrimitiveObject,
-        args: &HashMap<String, Literal>,
-        _additional_info: &Option<HashMap<String, Literal>>,
+        object: &mut Self,
+        args: HashMap<String, Literal>,
+        _additional_info: Option<&HashMap<String, Literal>>,
         data: &mut Data,
         interval: Interval,
         _content_type: &str,
     ) -> Result<Literal, ErrorInfo> {
-        let usage = "contains(key: string) => boolean";
-
-        if args.len() != 1 {
-            return Err(gen_error_info(
-                Position::new(interval, &data.context.flow),
-                format!("usage: {}", usage),
-            ));
-        }
-
-        let key = match args.get("arg0") {
-            Some(res) if res.primitive.get_type() == PrimitiveType::PrimitiveString => {
-                Literal::get_value::<String>(
-                    &res.primitive,
-                    &data.context.flow,
-                    interval,
-                    ERROR_OBJECT_CONTAINS.to_owned(),
-                )?
-            }
-            _ => {
-                return Err(gen_error_info(
-                    Position::new(interval, &data.context.flow),
-                    ERROR_OBJECT_CONTAINS.to_owned(),
-                ));
-            }
-        };
+        let [key] = get_string_args(
+            &args,
+            data,
+            interval,
+            ERROR_OBJECT_CONTAINS,
+            "contains(key: string) => boolean",
+        )?;
 
         let result = object.value.contains_key(key);
 
         Ok(PrimitiveBoolean::get_literal(result, interval))
     }
 
+    #[allow(clippy::needless_pass_by_value)]
     fn is_empty(
-        object: &mut PrimitiveObject,
-        args: &HashMap<String, Literal>,
-        _additional_info: &Option<HashMap<String, Literal>>,
+        object: &mut Self,
+        args: HashMap<String, Literal>,
+        _additional_info: Option<&HashMap<String, Literal>>,
         data: &mut Data,
         interval: Interval,
         _content_type: &str,
     ) -> Result<Literal, ErrorInfo> {
-        let usage = "is_empty() => boolean";
-
-        if !args.is_empty() {
-            return Err(gen_error_info(
-                Position::new(interval, &data.context.flow),
-                format!("usage: {}", usage),
-            ));
-        }
+        require_n_args(0, &args, interval, data, "is_empty() => boolean")?;
 
         let result = object.value.is_empty();
 
         Ok(PrimitiveBoolean::get_literal(result, interval))
     }
 
+    #[allow(clippy::needless_pass_by_value)]
     fn length(
-        object: &mut PrimitiveObject,
-        args: &HashMap<String, Literal>,
-        _additional_info: &Option<HashMap<String, Literal>>,
+        object: &mut Self,
+        args: HashMap<String, Literal>,
+        _additional_info: Option<&HashMap<String, Literal>>,
         data: &mut Data,
         interval: Interval,
         _content_type: &str,
     ) -> Result<Literal, ErrorInfo> {
-        let usage = "length() => int";
-
-        if !args.is_empty() {
-            return Err(gen_error_info(
-                Position::new(interval, &data.context.flow),
-                format!("usage: {}", usage),
-            ));
-        }
+        require_n_args(0, &args, interval, data, "length() => int")?;
 
         let result = object.value.len();
 
-        Ok(PrimitiveInt::get_literal(result as i64, interval))
-    }
-
-    fn keys(
-        object: &mut PrimitiveObject,
-        args: &HashMap<String, Literal>,
-        _additional_info: &Option<HashMap<String, Literal>>,
-        data: &mut Data,
-        interval: Interval,
-        _content_type: &str,
-    ) -> Result<Literal, ErrorInfo> {
-        let usage = "keys() => array";
-
-        if !args.is_empty() {
-            return Err(gen_error_info(
-                Position::new(interval, &data.context.flow),
-                format!("usage: {}", usage),
-            ));
-        }
-
-        let mut result = Vec::new();
-
-        for key in object.value.keys() {
-            result.push(PrimitiveString::get_literal(key, interval));
-        }
-
-        Ok(PrimitiveArray::get_literal(&result, interval))
-    }
-
-    fn values(
-        object: &mut PrimitiveObject,
-        args: &HashMap<String, Literal>,
-        _additional_info: &Option<HashMap<String, Literal>>,
-        data: &mut Data,
-        interval: Interval,
-        _content_type: &str,
-    ) -> Result<Literal, ErrorInfo> {
-        let usage = "values() => array";
-
-        if !args.is_empty() {
-            return Err(gen_error_info(
-                Position::new(interval, &data.context.flow),
-                format!("usage: {}", usage),
-            ));
-        }
-
-        let mut result = Vec::new();
-
-        for value in object.value.values() {
-            result.push(value.to_owned());
-        }
-
-        Ok(PrimitiveArray::get_literal(&result, interval))
-    }
-
-    fn get_generics(
-        object: &mut PrimitiveObject,
-        args: &HashMap<String, Literal>,
-        _additional_info: &Option<HashMap<String, Literal>>,
-        data: &mut Data,
-        interval: Interval,
-        _content_type: &str,
-    ) -> Result<Literal, ErrorInfo> {
-        let usage = "get(key: string) => primitive";
-
-        if args.len() != 1 {
-            return Err(gen_error_info(
-                Position::new(interval, &data.context.flow),
-                format!("usage: {}", usage),
-            ));
-        }
-
-        let key = match args.get("arg0") {
-            Some(res) if res.primitive.get_type() == PrimitiveType::PrimitiveString => {
-                Literal::get_value::<String>(
-                    &res.primitive,
-                    &data.context.flow,
-                    interval,
-                    ERROR_OBJECT_GET_GENERICS.to_owned(),
-                )?
-            }
-            _ => {
-                return Err(gen_error_info(
+        Ok(PrimitiveInt::get_literal(
+            result.to_i64().ok_or_else(|| {
+                gen_error_info(
                     Position::new(interval, &data.context.flow),
-                    ERROR_OBJECT_GET_GENERICS.to_owned(),
-                ));
-            }
-        };
+                    OVERFLOWING_OPERATION.to_string(),
+                )
+            })?,
+            interval,
+        ))
+    }
+
+    #[allow(clippy::needless_pass_by_value)]
+    fn keys(
+        object: &mut Self,
+        args: HashMap<String, Literal>,
+        _additional_info: Option<&HashMap<String, Literal>>,
+        data: &mut Data,
+        interval: Interval,
+        _content_type: &str,
+    ) -> Result<Literal, ErrorInfo> {
+        require_n_args(0, &args, interval, data, "keys() => array")?;
+
+        let result = object
+            .value
+            .keys()
+            .map(|key| PrimitiveString::get_literal(key, interval))
+            .collect();
+
+        Ok(PrimitiveArray::get_literal(result, interval))
+    }
+
+    #[allow(clippy::needless_pass_by_value)]
+    fn values(
+        object: &mut Self,
+        args: HashMap<String, Literal>,
+        _additional_info: Option<&HashMap<String, Literal>>,
+        data: &mut Data,
+        interval: Interval,
+        _content_type: &str,
+    ) -> Result<Literal, ErrorInfo> {
+        require_n_args(0, &args, interval, data, "values() => array")?;
+
+        let result = object.value.values().cloned().collect();
+
+        Ok(PrimitiveArray::get_literal(result, interval))
+    }
+
+    #[allow(clippy::needless_pass_by_value)]
+    fn get_generics(
+        object: &mut Self,
+        args: HashMap<String, Literal>,
+        _additional_info: Option<&HashMap<String, Literal>>,
+        data: &mut Data,
+        interval: Interval,
+        _content_type: &str,
+    ) -> Result<Literal, ErrorInfo> {
+        let [key] = get_string_args(
+            &args,
+            data,
+            interval,
+            ERROR_OBJECT_GET_GENERICS,
+            "get(key: string) => primitive",
+        )?;
 
         match object.value.get(key) {
-            Some(res) => Ok(res.to_owned()),
+            Some(res) => Ok(res.clone()),
             None => Ok(PrimitiveNull::get_literal(interval)),
         }
     }
 }
 
 impl PrimitiveObject {
+    #[allow(clippy::needless_pass_by_value)]
     fn clear_values(
-        object: &mut PrimitiveObject,
-        args: &HashMap<String, Literal>,
-        _additional_info: &Option<HashMap<String, Literal>>,
+        object: &mut Self,
+        args: HashMap<String, Literal>,
+        _additional_info: Option<&HashMap<String, Literal>>,
         data: &mut Data,
         interval: Interval,
         _content_type: &str,
     ) -> Result<Literal, ErrorInfo> {
-        let usage = "clear_values() => null";
+        require_n_args(0, &args, interval, data, "clear_values() => null")?;
 
-        if !args.is_empty() {
-            return Err(gen_error_info(
-                Position::new(interval, &data.context.flow),
-                format!("usage: {}", usage),
-            ));
-        }
-
-        let mut vector: Vec<String> = Vec::new();
-
-        for key in object.value.keys() {
-            vector.push(key.to_owned());
-        }
-
-        for key in vector.iter() {
-            object
-                .value
-                .insert(key.to_owned(), PrimitiveNull::get_literal(interval));
-        }
+        object.value.iter_mut().for_each(|(_, value)| {
+            *value = PrimitiveNull::get_literal(interval);
+        });
 
         Ok(PrimitiveNull::get_literal(interval))
     }
 
+    #[allow(clippy::needless_pass_by_value)]
     fn insert(
-        object: &mut PrimitiveObject,
-        args: &HashMap<String, Literal>,
-        _additional_info: &Option<HashMap<String, Literal>>,
+        object: &mut Self,
+        args: HashMap<String, Literal>,
+        _additional_info: Option<&HashMap<String, Literal>>,
         data: &mut Data,
         interval: Interval,
         _content_type: &str,
     ) -> Result<Literal, ErrorInfo> {
         let usage = "insert(key: string, value: primitive) => null";
 
-        if args.len() != 2 {
-            return Err(gen_error_info(
-                Position::new(interval, &data.context.flow),
-                format!("usage: {}", usage),
-            ));
-        }
+        require_n_args(2, &args, interval, data, usage)?;
 
         let key = match args.get("arg0") {
             Some(res) if res.primitive.get_type() == PrimitiveType::PrimitiveString => {
-                Literal::get_value::<String>(
+                Literal::get_value::<String, _>(
                     &res.primitive,
                     &data.context.flow,
                     interval,
-                    ERROR_OBJECT_INSERT.to_owned(),
+                    ERROR_OBJECT_INSERT,
                 )?
             }
             _ => {
@@ -2411,54 +2068,34 @@ impl PrimitiveObject {
             }
         };
 
-        let value = match args.get("arg1") {
-            Some(res) => res,
-            _ => {
-                return Err(gen_error_info(
-                    Position::new(interval, &data.context.flow),
-                    format!("usage: {}", usage),
-                ));
-            }
+        let Some(value) = args.get("arg1") else {
+            return Err(gen_error_info(
+                Position::new(interval, &data.context.flow),
+                format!("usage: {usage}"),
+            ));
         };
 
-        object.value.insert(key.to_owned(), value.to_owned());
+        object.value.insert(key.clone(), value.clone());
 
         Ok(PrimitiveNull::get_literal(interval))
     }
 
+    #[allow(clippy::needless_pass_by_value)]
     fn assign(
-        object: &mut PrimitiveObject,
-        args: &HashMap<String, Literal>,
-        _additional_info: &Option<HashMap<String, Literal>>,
+        object: &mut Self,
+        args: HashMap<String, Literal>,
+        _additional_info: Option<&HashMap<String, Literal>>,
         data: &mut Data,
         interval: Interval,
         _content_type: &str,
     ) -> Result<Literal, ErrorInfo> {
-        let usage = "assign(obj: Object) => null";
-
-        if args.len() != 1 {
-            return Err(gen_error_info(
-                Position::new(interval, &data.context.flow),
-                format!("usage: {}", usage),
-            ));
-        }
-
-        let obj = match args.get("arg0") {
-            Some(res) if res.primitive.get_type() == PrimitiveType::PrimitiveObject => {
-                Literal::get_value::<HashMap<String, Literal>>(
-                    &res.primitive,
-                    &data.context.flow,
-                    interval,
-                    ERROR_OBJECT_ASSIGN.to_owned(),
-                )?
-            }
-            _ => {
-                return Err(gen_error_info(
-                    Position::new(interval, &data.context.flow),
-                    ERROR_OBJECT_ASSIGN.to_owned(),
-                ));
-            }
-        };
+        let [obj]: [&HashMap<String, Literal>; 1] = get_args(
+            &args,
+            data,
+            interval,
+            ERROR_OBJECT_ASSIGN,
+            "assign(obj: Object) => null",
+        )?;
 
         object
             .value
@@ -2467,39 +2104,22 @@ impl PrimitiveObject {
         Ok(PrimitiveNull::get_literal(interval))
     }
 
+    #[allow(clippy::needless_pass_by_value)]
     fn remove(
-        object: &mut PrimitiveObject,
-        args: &HashMap<String, Literal>,
-        _additional_info: &Option<HashMap<String, Literal>>,
+        object: &mut Self,
+        args: HashMap<String, Literal>,
+        _additional_info: Option<&HashMap<String, Literal>>,
         data: &mut Data,
         interval: Interval,
         _content_type: &str,
     ) -> Result<Literal, ErrorInfo> {
-        let usage = "remove(key: string) => primitive";
-
-        if args.len() != 1 {
-            return Err(gen_error_info(
-                Position::new(interval, &data.context.flow),
-                format!("usage: {}", usage),
-            ));
-        }
-
-        let key = match args.get("arg0") {
-            Some(res) if res.primitive.get_type() == PrimitiveType::PrimitiveString => {
-                Literal::get_value::<String>(
-                    &res.primitive,
-                    &data.context.flow,
-                    interval,
-                    ERROR_OBJECT_REMOVE.to_owned(),
-                )?
-            }
-            _ => {
-                return Err(gen_error_info(
-                    Position::new(interval, &data.context.flow),
-                    ERROR_OBJECT_REMOVE.to_owned(),
-                ));
-            }
-        };
+        let [key] = get_string_args(
+            &args,
+            data,
+            interval,
+            ERROR_OBJECT_REMOVE,
+            "remove(key: string) => primitive",
+        )?;
 
         match object.value.remove(key) {
             Some(value) => Ok(value),
@@ -2517,7 +2137,7 @@ fn insert_to_object(
     dst: &mut PrimitiveObject,
     key_name: &str,
     flow_name: &str,
-    literal: &Literal,
+    literal: Literal,
 ) {
     dst.value
         .entry(key_name.to_owned())
@@ -2528,12 +2148,12 @@ fn insert_to_object(
                 literal.interval,
                 ERROR_UNREACHABLE.to_owned(),
             ) {
-                for (key, value) in src.iter() {
-                    tmp.insert(key.to_owned(), value.to_owned());
+                for (key, value) in src {
+                    tmp.insert(key.clone(), value.clone());
                 }
             }
         })
-        .or_insert_with(|| literal.to_owned());
+        .or_insert_with(|| literal);
 }
 
 ////////////////////////////////////////////////////////////////////////////////
@@ -2541,17 +2161,26 @@ fn insert_to_object(
 ////////////////////////////////////////////////////////////////////////////////
 
 impl PrimitiveObject {
-    pub fn new(value: &HashMap<String, Literal>) -> Self {
-        Self {
-            value: value.to_owned(),
-        }
+    #[must_use]
+    pub fn new(value: HashMap<String, Literal>) -> Self {
+        Self { value }
     }
 
-    pub fn get_literal(object: &HashMap<String, Literal>, interval: Interval) -> Literal {
-        let primitive = Box::new(PrimitiveObject::new(object));
+    #[must_use]
+    pub fn get_literal(object: HashMap<String, Literal>, interval: Interval) -> Literal {
+        Self::get_literal_with_type("object", object, interval)
+    }
+
+    #[must_use]
+    pub fn get_literal_with_type(
+        content_type: &str,
+        object: HashMap<String, Literal>,
+        interval: Interval,
+    ) -> Literal {
+        let primitive = Box::new(Self::new(object));
 
         Literal {
-            content_type: "object".to_owned(),
+            content_type: content_type.to_owned(),
             primitive,
             additional_info: None,
             secure_variable: false,
@@ -2559,19 +2188,18 @@ impl PrimitiveObject {
         }
     }
 
+    #[must_use]
     pub fn obj_literal_to_json(map: &HashMap<String, Literal>) -> serde_json::Value {
-        let mut object: serde_json::map::Map<String, serde_json::Value> =
-            serde_json::map::Map::new();
-
-        for (key, literal) in map.iter() {
-            let content_type = &literal.content_type;
-            object.insert(
-                key.to_owned(),
-                literal.primitive.format_mem(content_type, false),
-            );
-        }
-
-        serde_json::Value::Object(object)
+        serde_json::Value::Object(
+            map.iter()
+                .map(|(key, literal)| {
+                    (
+                        key.clone(),
+                        literal.primitive.format_mem(&literal.content_type, false),
+                    )
+                })
+                .collect(),
+        )
     }
 }
 
@@ -2593,57 +2221,21 @@ impl Primitive for PrimitiveObject {
         None
     }
 
-    fn do_add(&self, other: &dyn Primitive) -> Result<Box<dyn Primitive>, String> {
-        Err(format!(
-            "{} {:?} + {:?}",
-            ERROR_ILLEGAL_OPERATION,
-            self.get_type(),
-            other.get_type()
-        ))
-    }
-
-    fn do_sub(&self, other: &dyn Primitive) -> Result<Box<dyn Primitive>, String> {
-        Err(format!(
-            "{} {:?} - {:?}",
-            ERROR_ILLEGAL_OPERATION,
-            self.get_type(),
-            other.get_type()
-        ))
-    }
-
-    fn do_div(&self, other: &dyn Primitive) -> Result<Box<dyn Primitive>, String> {
-        Err(format!(
-            "{} {:?} / {:?}",
-            ERROR_ILLEGAL_OPERATION,
-            self.get_type(),
-            other.get_type()
-        ))
-    }
-
-    fn do_mul(&self, other: &dyn Primitive) -> Result<Box<dyn Primitive>, String> {
-        Err(format!(
-            "{} {:?} * {:?}",
-            ERROR_ILLEGAL_OPERATION,
-            self.get_type(),
-            other.get_type()
-        ))
-    }
-
-    fn do_rem(&self, other: &dyn Primitive) -> Result<Box<dyn Primitive>, String> {
-        Err(format!(
-            "{} {:?} % {:?}",
-            ERROR_ILLEGAL_OPERATION,
-            self.get_type(),
-            other.get_type()
-        ))
-    }
+    illegal_math_ops!();
 
     fn as_debug(&self) -> &dyn std::fmt::Debug {
         self
     }
 
-    fn as_any(&self) -> &dyn std::any::Any {
+    fn as_any(&self) -> &dyn Any {
         self
+    }
+    fn into_any(self: Box<Self>) -> Box<dyn Any> {
+        self
+    }
+
+    fn into_value(self: Box<Self>) -> Box<dyn Any> {
+        Box::new(self.value)
     }
 
     fn get_type(&self) -> PrimitiveType {
@@ -2658,8 +2250,10 @@ impl Primitive for PrimitiveObject {
         let mut object: serde_json::map::Map<String, serde_json::Value> =
             serde_json::map::Map::new();
 
-        for (key, literal) in self.value.iter() {
-            if !TYPES.contains(&&(*literal.content_type)) {
+        for (key, literal) in &self.value {
+            if TYPES.contains(&&(*literal.content_type)) {
+                object.insert(key.clone(), literal.primitive.to_json());
+            } else {
                 let mut map = serde_json::Map::new();
                 map.insert(
                     "content_type".to_owned(),
@@ -2667,9 +2261,7 @@ impl Primitive for PrimitiveObject {
                 );
                 map.insert("content".to_owned(), literal.primitive.to_json());
 
-                object.insert(key.to_owned(), serde_json::json!(map));
-            } else {
-                object.insert(key.to_owned(), literal.primitive.to_json());
+                object.insert(key.clone(), serde_json::json!(map));
             }
         }
 
@@ -2677,27 +2269,14 @@ impl Primitive for PrimitiveObject {
     }
 
     fn format_mem(&self, content_type: &str, first: bool) -> serde_json::Value {
-        let mut object: serde_json::map::Map<String, serde_json::Value> =
-            serde_json::map::Map::new();
-
+        let content = Self::obj_literal_to_json(&self.value);
         match (content_type, first) {
-            (content_type, false) if content_type == "object" => {
-                PrimitiveObject::obj_literal_to_json(&self.value)
-            }
+            ("object", false) => content,
             (content_type, _) => {
-                let mut map: serde_json::Map<String, serde_json::Value> = serde_json::Map::new();
-                map.insert("_content_type".to_owned(), serde_json::json!(content_type));
-
-                for (key, literal) in self.value.iter() {
-                    let content_type = &literal.content_type;
-                    object.insert(
-                        key.to_owned(),
-                        literal.primitive.format_mem(content_type, false),
-                    );
-                }
-                map.insert("_content".to_owned(), serde_json::Value::Object(object));
-
-                serde_json::Value::Object(map)
+                json!({
+                    "_content_type": content_type,
+                    "_content": content
+                })
             }
         }
     }
@@ -2728,14 +2307,14 @@ impl Primitive for PrimitiveObject {
     fn do_exec(
         &mut self,
         name: &str,
-        args: &HashMap<String, Literal>,
+        args: HashMap<String, Literal>,
         mem_type: &MemoryType,
-        additional_info: &Option<HashMap<String, Literal>>,
+        additional_info: Option<&HashMap<String, Literal>>,
         interval: Interval,
         content_type: &ContentType,
         data: &mut Data,
         msg_data: &mut MessageData,
-        sender: &Option<mpsc::Sender<MSG>>,
+        sender: Option<&mpsc::Sender<MSG>>,
     ) -> Result<(Literal, Right), ErrorInfo> {
         let event = vec![FUNCTIONS_EVENT];
         let http = vec![FUNCTIONS_HTTP, FUNCTIONS_READ, FUNCTIONS_WRITE];
@@ -2765,24 +2344,23 @@ impl Primitive for PrimitiveObject {
             ContentType::Primitive => ("", generics),
         };
 
-        for function in vector.iter() {
+        for function in &vector {
             if let Some((f, right)) = function.get(name) {
                 if *mem_type == MemoryType::Constant && *right == Right::Write {
                     return Err(gen_error_info(
                         Position::new(interval, &data.context.flow),
                         ERROR_CONSTANT_MUTABLE_FUNCTION.to_string(),
                     ));
-                } else {
-                    let result = f(self, args, additional_info, data, interval, content_type)?;
-
-                    return Ok((result, *right));
                 }
+                let result = f(self, args, additional_info, data, interval, content_type)?;
+
+                return Ok((result, *right));
             }
         }
 
         if is_event {
             let vec = ["text", "payload"];
-            for value in vec.iter() {
+            for value in &vec {
                 if let Some(res) = self.value.get_mut(*value) {
                     return res.primitive.do_exec(
                         name,
@@ -2801,7 +2379,41 @@ impl Primitive for PrimitiveObject {
 
         Err(gen_error_info(
             Position::new(interval, &data.context.flow),
-            format!("[{}] {}", name, ERROR_OBJECT_UNKNOWN_METHOD),
+            format!("[{name}] {ERROR_OBJECT_UNKNOWN_METHOD}"),
         ))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn test_format_mem() {
+        let object = PrimitiveObject::new(HashMap::from([(
+            "a".to_owned(),
+            PrimitiveInt::get_literal(1, Interval::default()),
+        )]));
+
+        let result = object.format_mem("object", false);
+        let expected = json! {
+            {
+                "a": 1
+            }
+        };
+
+        assert_eq!(result, expected);
+
+        let result = object.format_mem("not-object", true);
+        let expected = json! {
+            {
+                "_content_type": "not-object",
+                "_content": {
+                    "a": 1
+                }
+            }
+        };
+        assert_eq!(result, expected);
     }
 }

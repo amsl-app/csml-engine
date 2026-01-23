@@ -1,7 +1,7 @@
+use csml_interpreter::data::Context;
 use csml_interpreter::data::csml_bot::{CsmlBot, Module};
 use csml_interpreter::data::csml_flow::CsmlFlow;
 use csml_interpreter::data::event::Event;
-use csml_interpreter::data::Context;
 use csml_interpreter::interpret;
 use csml_interpreter::load_components;
 use csml_interpreter::{search_for_modules, validate_bot};
@@ -36,7 +36,10 @@ fn main() {
         None,
         Some(vec![Module {
             name: "module".to_string(),
-            url: Some("https://raw.githubusercontent.com/CSML-by-Clevy/csml-engine/dev/csml_engine/CSML/flow2.csml".to_string()),
+            url: Some(
+                "https://raw.githubusercontent.com/CSML-by-Clevy/csml-engine/dev/csml_engine/CSML/flow2.csml"
+                    .to_string(),
+            ),
             version: "latest".to_string(),
             flow: None,
             auth: None,
@@ -71,13 +74,13 @@ fn main() {
     // Run interpreter
     let result = validate_bot(&bot);
 
-    if result.errors.is_some() {
+    if !result.errors.is_empty() {
         dbg!(result.errors);
         return;
     }
-    if result.warnings.is_some() {
+    if !result.warnings.is_empty() {
         dbg!(result.warnings);
     }
 
-    dbg!(interpret(bot, context, event, None));
+    dbg!(interpret(&bot, context, &event, None));
 }

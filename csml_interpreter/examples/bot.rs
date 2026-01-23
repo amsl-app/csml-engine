@@ -1,7 +1,7 @@
+use csml_interpreter::data::Context;
 use csml_interpreter::data::csml_bot::CsmlBot;
 use csml_interpreter::data::csml_flow::CsmlFlow;
 use csml_interpreter::data::event::Event;
-use csml_interpreter::data::Context;
 use csml_interpreter::validate_bot;
 use csml_interpreter::{interpret, load_components};
 use std::collections::HashMap;
@@ -116,13 +116,13 @@ fn main() {
     // Run interpreter
     let result = validate_bot(&bot);
 
-    if result.errors.is_some() {
+    if !result.errors.is_empty() {
         dbg!(result.errors);
         return;
     }
-    if result.warnings.is_some() {
+    if !result.warnings.is_empty() {
         dbg!(result.warnings);
     }
 
-    dbg!(interpret(bot, context, event, None));
+    dbg!(interpret(&bot, context, &event, None));
 }

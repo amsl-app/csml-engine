@@ -1,5 +1,8 @@
-use crate::data::{ast::*, primitive::PrimitiveInt, tokens::*};
-use crate::error_format::{gen_nom_failure, ERROR_RIGHT_BRACKET};
+use crate::data::{
+    ast::{AssignType, Expr, ObjectType},
+    primitive::PrimitiveInt,
+    tokens::{ASSIGN, Span},
+};
 use crate::parser::{
     operator::{parse_operator, tools::parse_item_operator},
     parse_built_in::parse_built_in,
@@ -8,38 +11,39 @@ use crate::parser::{
     parse_idents::{parse_arg_idents_assignation, parse_idents_as, parse_idents_usage},
     parse_literal::parse_literal_expr,
     parse_object::parse_object,
-    parse_parenthesis::parse_r_parentheses,
     parse_path::parse_path,
     parse_string::parse_string,
-    tools::*,
+    tools::{get_interval, get_string, parse_error},
 };
 
+use crate::data::tokens::{Bracket, LParen, Paren, RParen, Token};
+use crate::parser::parse_braces::parse_brace;
+use crate::parser::parse_group::parse_group;
 use nom::{
+    IResult, Parser,
     branch::alt,
     bytes::complete::tag,
-    combinator::{cut, opt},
+    combinator::opt,
     error::{ContextError, ParseError},
-    multi::separated_list0,
-    sequence::{delimited, preceded, terminated, tuple},
-    Err, IResult,
+    sequence::{delimited, preceded},
 };
-
 ////////////////////////////////////////////////////////////////////////////////
 // PRIVATE FUNCTIONS
 ////////////////////////////////////////////////////////////////////////////////
 
-fn parse_condition_group<'a, E: ParseError<Span<'a>>>(s: Span<'a>) -> IResult<Span<'a>, Expr, E>
+fn parse_condition_group<'a, E>(s: Span<'a>) -> IResult<Span<'a>, Expr, E>
 where
     E: ParseError<Span<'a>> + ContextError<Span<'a>>,
 {
     let (s, interval) = get_interval(s)?;
 
-    let (s, opt) = opt(preceded(comment, parse_item_operator))(s)?;
+    let (s, opt) = opt(preceded(comment, parse_item_operator)).parse(s)?;
     let (s, expr) = delimited(
-        preceded(comment, tag(L_PAREN)),
+        preceded(comment, tag(LParen::TOKEN)),
         parse_operator,
-        parse_r_parentheses,
-    )(s)?;
+        parse_brace(RParen),
+    )
+    .parse(s)?;
 
     match opt {
         Some(infix) => {
@@ -58,8 +62,8 @@ where
     E: ParseError<Span<'a>> + ContextError<Span<'a>>,
 {
     let (s, name) = parse_arg_idents_assignation(s)?;
-    let (s, _) = preceded(comment, tag(ASSIGN))(s)?;
-    let (s, expr) = preceded(comment, parse_operator)(s)?;
+    let (s, _) = preceded(comment, tag(ASSIGN)).parse(s)?;
+    let (s, expr) = preceded(comment, parse_operator).parse(s)?;
 
     Ok((
         s,
@@ -75,19 +79,6 @@ where
 // PUBLIC FUNCTIONS
 ////////////////////////////////////////////////////////////////////////////////
 
-pub fn parse_r_bracket<'a, E>(s: Span<'a>) -> IResult<Span<'a>, Span<'a>, E>
-where
-    E: ParseError<Span<'a>> + ContextError<Span<'a>>,
-{
-    match tag(R_BRACKET)(s) {
-        Ok((rest, val)) => Ok((rest, val)),
-        Err(Err::Error((s, _err))) | Err(Err::Failure((s, _err))) => {
-            Err(gen_nom_failure(s, ERROR_RIGHT_BRACKET))
-        }
-        Err(Err::Incomplete(needed)) => Err(Err::Incomplete(needed)),
-    }
-}
-
 pub fn parse_idents_expr_usage<'a, E>(s: Span<'a>) -> IResult<Span<'a>, Expr, E>
 where
     E: ParseError<Span<'a>> + ContextError<Span<'a>>,
@@ -101,21 +92,8 @@ pub fn parse_fn_args<'a, E>(s: Span<'a>) -> IResult<Span<'a>, Vec<String>, E>
 where
     E: ParseError<Span<'a>> + ContextError<Span<'a>>,
 {
-    let (start, _) = preceded(comment, get_interval)(s)?;
-    let (s, (vec, _)) = parse_error(
-        start,
-        s,
-        preceded(
-            tag(L_PAREN),
-            terminated(
-                tuple((
-                    separated_list0(preceded(comment, tag(COMMA)), preceded(comment, get_string)),
-                    opt(preceded(comment, tag(COMMA))),
-                )),
-                cut(parse_r_parentheses),
-            ),
-        ),
-    )?;
+    let (start, _) = preceded(comment, get_interval).parse(s)?;
+    let (s, vec) = parse_error(start, s, parse_group(Paren, preceded(comment, get_string)))?;
 
     Ok((s, vec))
 }
@@ -124,23 +102,11 @@ pub fn parse_expr_list<'a, E>(s: Span<'a>) -> IResult<Span<'a>, Expr, E>
 where
     E: ParseError<Span<'a>> + ContextError<Span<'a>>,
 {
-    let (start, mut interval) = preceded(comment, get_interval)(s)?;
-    let (s, (vec, _)) = parse_error(
+    let (start, mut interval) = preceded(comment, get_interval).parse(s)?;
+    let (s, vec) = parse_error(
         start,
         s,
-        preceded(
-            tag(L_PAREN),
-            terminated(
-                tuple((
-                    separated_list0(
-                        preceded(comment, tag(COMMA)),
-                        alt((parse_assignation_without_path, parse_operator)),
-                    ),
-                    opt(preceded(comment, tag(COMMA))),
-                )),
-                cut(parse_r_parentheses),
-            ),
-        ),
+        parse_group(Paren, alt((parse_assignation_without_path, parse_operator))),
     )?;
     let (s, end) = get_interval(s)?;
     interval.add_end(end);
@@ -152,22 +118,9 @@ pub fn parse_expr_array<'a, E>(s: Span<'a>) -> IResult<Span<'a>, Expr, E>
 where
     E: ParseError<Span<'a>> + ContextError<Span<'a>>,
 {
-    let (start, mut interval) = preceded(comment, get_interval)(s)?;
+    let (start, mut interval) = preceded(comment, get_interval).parse(s)?;
 
-    let (s, (vec, _)) = parse_error(
-        start,
-        s,
-        preceded(
-            tag(L_BRACKET),
-            terminated(
-                tuple((
-                    separated_list0(preceded(comment, tag(COMMA)), parse_operator), //parse_basic_expr
-                    opt(preceded(comment, tag(COMMA))),
-                )),
-                preceded(comment, parse_r_bracket),
-            ),
-        ),
-    )?;
+    let (s, vec) = parse_error(start, s, parse_group(Bracket, parse_operator))?;
     let (s, end) = get_interval(s)?;
     interval.add_end(end);
 
@@ -189,7 +142,8 @@ where
         parse_built_in,
         parse_string,
         parse_idents_expr_usage,
-    ))(s)?;
+    ))
+    .parse(s)?;
 
     let (s, expr) = parse_path(s, expr)?;
 

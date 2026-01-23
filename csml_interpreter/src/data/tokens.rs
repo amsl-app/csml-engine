@@ -2,10 +2,37 @@ use nom_locate::LocatedSpan;
 
 pub type Span<'a> = LocatedSpan<&'a str>;
 
-pub const PORT: &str = "3002";
+pub trait Token {
+    const TOKEN: &'static str;
+    const MISSING_ERROR: &'static str;
+}
 
-pub const WHITE_SPACE: &str = " \t\n\r";
-pub const INLINE_COMMENT: &str = "//";
+macro_rules! token {
+    ($name:ident, $text:expr) => {
+        pub struct $name;
+
+        impl Token for $name {
+            const TOKEN: &'static str = $text;
+            const MISSING_ERROR: &'static str = concat!("expecting ", $text, "'");
+        }
+    };
+}
+
+pub trait Braces {
+    type Left: Token;
+    type Right: Token;
+}
+
+macro_rules! braces {
+    ($name:ident, $left:ident, $right:ident) => {
+        pub struct $name;
+
+        impl Braces for $name {
+            type Left = $left;
+            type Right = $right;
+        }
+    };
+}
 
 pub const START_COMMENT: &str = "/*";
 pub const END_COMMENT: &str = "*/";
@@ -39,21 +66,21 @@ pub const LESS_THAN: &str = "<";
 
 pub const COMMA: &str = ",";
 pub const DOT: &str = ".";
-pub const SEMICOLON: &str = ";";
 pub const COLON: &str = ":";
 pub const DOUBLE_QUOTE: &str = "\"";
 pub const BACKSLASH_DOUBLE_QUOTE: &str = "\\\"";
 
-pub const UNDERSCORE: char = '_';
+token!(LParen, "(");
+token!(RParen, ")");
+braces!(Paren, LParen, RParen);
 
-pub const L_PAREN: &str = "(";
-pub const R_PAREN: &str = ")";
-pub const L_BRACE: &str = "{";
-pub const R_BRACE: &str = "}";
-pub const L_BRACKET: &str = "[";
-pub const R_BRACKET: &str = "]";
-pub const L2_BRACE: &str = "{{";
-pub const R2_BRACE: &str = "}}";
+token!(LBrace, "{");
+token!(RBrace, "}");
+braces!(Brace, LBrace, RBrace);
+
+token!(LBracket, "[");
+token!(RBracket, "]");
+braces!(Bracket, LBracket, RBracket);
 
 pub const FOREACH: &str = "foreach";
 pub const WHILE: &str = "while";
@@ -76,24 +103,20 @@ pub const SAY: &str = "say";
 pub const DEBUG_ACTION: &str = "debug";
 pub const LOG_ACTION: &str = "log";
 pub const USE: &str = "use";
-pub const HOLD: &str = "hold";
-pub const HOLD_SECURE: &str = "hold_secure";
+token!(Hold, "hold");
+token!(HoldSecure, "hold_secure");
 pub const GOTO: &str = "goto";
 pub const PREVIOUS: &str = "previous";
 pub const MATCH: &str = "match";
 pub const NOT_MATCH: &str = "!match";
-pub const DEFAULT: &str = "default";
 pub const REMEMBER: &str = "remember";
 pub const FORGET: &str = "forget";
 pub const _METADATA: &str = "_metadata";
 pub const _MEMORY: &str = "_memory";
 pub const _ENV: &str = "_env";
-pub const BREAK: &str = "break";
-pub const CONTINUE: &str = "continue";
+token!(Break, "break");
+token!(Continue, "continue");
 pub const RETURN: &str = "return";
-
-pub const FN_SCOPE_REJECTED: &[&str] =
-    &[SAY, GOTO, REMEMBER, FORGET, USE, HOLD, HOLD_SECURE, BREAK];
 
 pub const TRUE: &str = "true";
 pub const FALSE: &str = "false";
@@ -120,40 +143,64 @@ pub const TYPES: &[&str] = &[
     NULL,
 ];
 
-pub const RESERVED: &[&str] = &[
-    FOREACH, WHILE, IF, ELSE, IMPORT, CONST, INSERT, AS, IN, DO, FROM, EVENT, FLOW, FILE, STEP,
-    SAY, USE, HOLD, GOTO, MATCH, _METADATA, _MEMORY, _ENV, DEFAULT, REMEMBER, FORGET, TRUE, FALSE,
-    NULL, BREAK, COMPONENT,
-];
-
 pub const UTILISATION_RESERVED: &[&str] = &[
-    FOREACH, WHILE, IF, ELSE, IMPORT, CONST, INSERT, AS, DO, FLOW, STEP, SAY, USE, HOLD, GOTO,
-    MATCH, REMEMBER, FORGET, BREAK, COMPONENT,
+    FOREACH,
+    WHILE,
+    IF,
+    ELSE,
+    IMPORT,
+    CONST,
+    INSERT,
+    AS,
+    DO,
+    FLOW,
+    STEP,
+    SAY,
+    USE,
+    Hold::TOKEN,
+    GOTO,
+    MATCH,
+    REMEMBER,
+    FORGET,
+    Break::TOKEN,
+    COMPONENT,
 ];
 
 pub const ASSIGNATION_RESERVED: &[&str] = &[
-    FOREACH, WHILE, IF, ELSE, IMPORT, AS, DO, EVENT, FLOW, STEP, SAY, USE, HOLD, GOTO, MATCH,
-    REMEMBER, FORGET, _METADATA, _MEMORY, _ENV, TRUE, FALSE, NULL, BREAK, COMPONENT,
+    FOREACH,
+    WHILE,
+    IF,
+    ELSE,
+    IMPORT,
+    AS,
+    DO,
+    EVENT,
+    FLOW,
+    STEP,
+    SAY,
+    USE,
+    Hold::TOKEN,
+    GOTO,
+    MATCH,
+    REMEMBER,
+    FORGET,
+    _METADATA,
+    _MEMORY,
+    _ENV,
+    TRUE,
+    FALSE,
+    NULL,
+    Break::TOKEN,
+    COMPONENT,
 ];
 
-pub const TYPING: &str = "Typing";
-pub const WAIT: &str = "Wait";
-pub const TEXT: &str = "Text";
-pub const URL: &str = "Url";
-pub const IMAGE: &str = "Image";
 pub const ONE_OF: &str = "OneOf";
 pub const SHUFFLE: &str = "Shuffle";
 pub const LENGTH: &str = "Length";
 pub const FIND: &str = "Find";
 pub const RANDOM: &str = "Random";
 pub const FLOOR: &str = "Floor";
-pub const VIDEO: &str = "Video";
-pub const AUDIO: &str = "Audio";
 
-pub const QUESTION: &str = "Question";
-pub const BUTTON: &str = "Button";
-pub const CAROUSEL: &str = "Carousel";
-pub const CARD: &str = "Card";
 pub const FN: &str = "Fn";
 pub const APP: &str = "App";
 pub const HTTP: &str = "HTTP";
@@ -162,7 +209,6 @@ pub const JWT: &str = "JWT";
 pub const CRYPTO: &str = "Crypto";
 pub const BASE64: &str = "Base64";
 pub const HEX: &str = "Hex";
-pub const FILE: &str = "File";
 pub const DEBUG: &str = "Debug";
 pub const UUID: &str = "UUID";
 pub const TIME: &str = "Time";
@@ -178,9 +224,3 @@ pub const BUILT_IN: &[&str] = &[
 pub const OR_BUILT_IN: &str = "Or";
 
 pub const BUILT_IN_WITHOUT_WARNINGS: &[&str] = &[OR_BUILT_IN];
-
-pub const FROM_FILE: &str = "FromFile";
-pub const GET_VALUE: &str = "GetValue";
-pub const FIRST: &str = "first";
-
-pub const MEMORY: &str = "memory";

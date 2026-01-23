@@ -1,11 +1,12 @@
 use crate::data::error_info::ErrorInfo;
 use crate::data::literal::ContentType;
-use crate::data::primitive::{closure::capture_variables, PrimitiveArray, PrimitiveObject};
+use crate::data::primitive::{PrimitiveArray, PrimitiveObject, closure::capture_variables};
 use crate::data::{
-    ast::*, warnings::DisplayWarnings, ArgsType, Data, Literal, MemoryType, MessageData, Position,
-    MSG,
+    ArgsType, Data, Literal, MSG, MemoryType, MessageData, Position,
+    ast::{Expr, Function, Interval, ObjectType, PathState},
+    warnings::DisplayWarnings,
 };
-use crate::error_format::*;
+use crate::error_format::{ERROR_EXPR_TO_LITERAL, gen_error_info};
 use crate::interpreter::{
     ast_interpreter::evaluate_condition,
     variable_handler::{
@@ -21,11 +22,11 @@ use std::{collections::HashMap, sync::mpsc};
 
 fn exec_path_literal(
     literal: &mut Literal,
-    dis_warnings: &DisplayWarnings,
+    dis_warnings: DisplayWarnings,
     path: Option<&[(Interval, PathState)]>,
     data: &mut Data,
     msg_data: &mut MessageData,
-    sender: &Option<mpsc::Sender<MSG>>,
+    sender: Option<&mpsc::Sender<MSG>>,
 ) -> Result<Literal, ErrorInfo> {
     if let Some(path) = path {
         let path = resolve_path(path, dis_warnings, data, msg_data, sender)?;
@@ -34,7 +35,7 @@ fn exec_path_literal(
             dis_warnings,
             &MemoryType::Use,
             None,
-            &Some(path),
+            Some(path),
             &ContentType::get(literal),
             data,
             msg_data,
@@ -43,7 +44,7 @@ fn exec_path_literal(
 
         Ok(new_literal)
     } else {
-        Ok(literal.to_owned())
+        Ok(literal.clone())
     }
 }
 
@@ -53,16 +54,16 @@ fn exec_path_literal(
 
 pub fn expr_to_literal(
     expr: &Expr,
-    dis_warnings: &DisplayWarnings,
+    dis_warnings: DisplayWarnings,
     path: Option<&[(Interval, PathState)]>,
     data: &mut Data,
     msg_data: &mut MessageData,
-    sender: &Option<mpsc::Sender<MSG>>,
+    sender: Option<&mpsc::Sender<MSG>>,
 ) -> Result<Literal, ErrorInfo> {
     match expr {
         Expr::ObjectExpr(ObjectType::As(name, var)) => {
             let value = expr_to_literal(var, dis_warnings, None, data, msg_data, sender)?;
-            data.step_vars.insert(name.ident.to_owned(), value.clone());
+            data.step_vars.insert(name.ident.clone(), value.clone());
             Ok(value)
         }
         Expr::PathExpr { literal, path } => {
@@ -85,49 +86,44 @@ pub fn expr_to_literal(
             let mut map = HashMap::new();
             let mut is_secure = false;
 
-            for (key, value) in object.iter() {
+            for (key, value) in object {
                 let lit = expr_to_literal(value, dis_warnings, None, data, msg_data, sender)?;
                 if lit.secure_variable {
                     is_secure = true;
                 }
 
-                map.insert(key.to_owned(), lit);
+                map.insert(key.clone(), lit);
             }
 
-            let mut literal = PrimitiveObject::get_literal(&map, range_interval.to_owned());
+            let mut literal = PrimitiveObject::get_literal(map, *range_interval);
             literal.secure_variable = is_secure;
 
             exec_path_literal(&mut literal, dis_warnings, path, data, msg_data, sender)
         }
         Expr::ComplexLiteral(vec, range_interval) => {
-            let mut string = get_string_from_complex_string(
-                vec,
-                range_interval.to_owned(),
-                data,
-                msg_data,
-                sender,
-            )?;
+            let mut string =
+                get_string_from_complex_string(vec, *range_interval, data, msg_data, sender)?;
             exec_path_literal(&mut string, dis_warnings, path, data, msg_data, sender)
         }
         Expr::VecExpr(vec, range_interval) => {
             let mut array = vec![];
             let mut is_secure = false;
 
-            for value in vec.iter() {
+            for value in vec {
                 let lit = expr_to_literal(value, dis_warnings, None, data, msg_data, sender)?;
                 if lit.secure_variable {
                     is_secure = true;
                 }
 
-                array.push(lit)
+                array.push(lit);
             }
-            let mut literal = PrimitiveArray::get_literal(&array, range_interval.to_owned());
+            let mut literal = PrimitiveArray::get_literal(array, *range_interval);
             literal.secure_variable = is_secure;
 
             exec_path_literal(&mut literal, dis_warnings, path, data, msg_data, sender)
         }
-        Expr::PostfixExpr(pretfix, expr) => {
-            let mut literal = evaluate_postfix(pretfix, expr, data, msg_data, sender)?;
+        Expr::PostfixExpr(prefix, expr) => {
+            let mut literal = evaluate_postfix(prefix, expr, data, msg_data, sender);
             exec_path_literal(&mut literal, dis_warnings, path, data, msg_data, sender)
         }
         Expr::InfixExpr(infix, exp_1, exp_2) => {
@@ -143,13 +139,13 @@ pub fn expr_to_literal(
                 msg_data,
                 sender,
             )?;
-            // only for closure capture the step variables
+            // only for closure capture the step slot
             let memory: HashMap<String, Literal> = data.get_all_memories();
             capture_variables(&mut new_value, memory, &data.context.flow);
             Ok(new_value)
         }
         Expr::IdentExpr(var, ..) => Ok(get_var(
-            var.to_owned(),
+            var.clone(),
             dis_warnings,
             path,
             data,
@@ -167,8 +163,8 @@ pub fn resolve_fn_args(
     expr: &Expr,
     data: &mut Data,
     msg_data: &mut MessageData,
-    dis_warnings: &DisplayWarnings,
-    sender: &Option<mpsc::Sender<MSG>>,
+    dis_warnings: DisplayWarnings,
+    sender: Option<&mpsc::Sender<MSG>>,
 ) -> Result<ArgsType, ErrorInfo> {
     match expr {
         Expr::VecExpr(vec, ..) => {
@@ -179,20 +175,17 @@ pub fn resolve_fn_args(
             for (index, value) in vec.iter().enumerate() {
                 match value {
                     Expr::ObjectExpr(ObjectType::Assign(_assign_type, name, var)) => {
-                        let name = match **name {
-                            Expr::IdentExpr(ref var, ..) => var,
-                            _ => {
-                                return Err(gen_error_info(
-                                    Position::new(interval_from_expr(name), &data.context.flow),
-                                    "key must be of type string".to_owned(),
-                                ))
-                            }
+                        let Expr::IdentExpr(ref name) = **name else {
+                            return Err(gen_error_info(
+                                Position::new(interval_from_expr(name), &data.context.flow),
+                                "key must be of type string".to_owned(),
+                            ));
                         };
                         named_args = true;
 
                         let literal =
                             expr_to_literal(var, dis_warnings, None, data, msg_data, sender)?;
-                        map.insert(name.ident.to_owned(), literal);
+                        map.insert(name.ident.clone(), literal);
                     }
                     expr => {
                         first += 1;
@@ -204,14 +197,15 @@ pub fn resolve_fn_args(
                         }
                         let literal =
                             expr_to_literal(expr, dis_warnings, None, data, msg_data, sender)?;
-                        map.insert(format!("arg{}", index), literal);
+                        map.insert(format!("arg{index}"), literal);
                     }
                 }
             }
 
-            match named_args {
-                true => Ok(ArgsType::Named(map)),
-                false => Ok(ArgsType::Normal(map)),
+            if named_args {
+                Ok(ArgsType::Named(map))
+            } else {
+                Ok(ArgsType::Normal(map))
             }
         }
         e => Err(gen_error_info(

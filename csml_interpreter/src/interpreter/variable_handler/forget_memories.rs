@@ -1,4 +1,4 @@
-use crate::data::{ast::*, data::Data, MessageData};
+use crate::data::{MessageData, ast::ForgetMemory, core::Data};
 
 pub fn forget_scope_memories(forget_mem: &ForgetMemory, data: &mut Data) {
     match forget_mem {
@@ -11,7 +11,7 @@ pub fn forget_scope_memories(forget_mem: &ForgetMemory, data: &mut Data) {
             data.context.current.remove(&memory.ident);
         }
         ForgetMemory::LIST(memories) => {
-            for memory in memories.iter() {
+            for memory in memories {
                 data.step_vars.remove(&memory.ident);
                 data.context.current.remove(&memory.ident);
             }
@@ -28,7 +28,7 @@ pub fn remove_message_data_memories(forget_mem: &ForgetMemory, message_data: &mu
             if let Some(memories_to_remember) = &message_data.memories {
                 let memories = memories_to_remember.iter().fold(vec![], |mut acc, mem| {
                     if mem.key != memory.ident {
-                        acc.push(mem.to_owned());
+                        acc.push(mem.clone());
                     }
                     acc
                 });
@@ -38,12 +38,12 @@ pub fn remove_message_data_memories(forget_mem: &ForgetMemory, message_data: &mu
         }
         ForgetMemory::LIST(memories) => {
             let list_of_memories: Vec<String> =
-                memories.iter().map(|mem| mem.ident.to_owned()).collect();
+                memories.iter().map(|mem| mem.ident.clone()).collect();
 
             if let Some(memories_to_remember) = &message_data.memories {
                 let memories = memories_to_remember.iter().fold(vec![], |mut acc, mem| {
                     if !list_of_memories.contains(&mem.key) {
-                        acc.push(mem.to_owned());
+                        acc.push(mem.clone());
                     }
                     acc
                 });

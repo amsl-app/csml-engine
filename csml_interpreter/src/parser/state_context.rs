@@ -1,4 +1,7 @@
-use crate::data::{ast::*, Literal};
+use crate::data::{
+    Literal,
+    ast::{Block, Expr, IfStatement, InstructionInfo},
+};
 
 ////////////////////////////////////////////////////////////////////////////////
 // DATA STRUCTURES
@@ -33,7 +36,7 @@ fn count_if_commands(if_statement: &mut IfStatement, index: &mut usize) {
             }
 
             if let Some(else_scope) = then_branch {
-                count_if_commands(else_scope, index)
+                count_if_commands(else_scope, index);
             }
         }
         IfStatement::ElseStmt(scope, ..) => count_scope_commands(scope, index),
@@ -41,7 +44,7 @@ fn count_if_commands(if_statement: &mut IfStatement, index: &mut usize) {
 }
 
 fn count_scope_commands(scope: &mut Block, index: &mut usize) {
-    for (command, info) in scope.commands.iter_mut() {
+    for (command, info) in &mut scope.commands {
         count_commands(command, index, info);
     }
 }
@@ -52,20 +55,20 @@ pub fn count_commands(command: &mut Expr, index: &mut usize, info: &mut Instruct
     match command {
         Expr::ObjectExpr(..) => {
             info.index = *index;
-            *index += 1
+            *index += 1;
         }
 
         Expr::IfExpr(if_statement) => {
             info.index = *index;
-            count_if_commands(if_statement, index)
+            count_if_commands(if_statement, index);
         }
         Expr::ForEachExpr(_ident, _index, _expr, block, _range) => {
             info.index = *index;
-            count_scope_commands(block, index)
+            count_scope_commands(block, index);
         }
         Expr::WhileExpr(_expr, block, _range) => {
             info.index = *index;
-            count_scope_commands(block, index)
+            count_scope_commands(block, index);
         }
         _ => {}
     }

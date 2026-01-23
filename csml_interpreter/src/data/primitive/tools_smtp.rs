@@ -1,31 +1,32 @@
 use crate::data::{
-    ast::Interval, error_info::ErrorInfo, position::Position, primitive::Data,
-    primitive::PrimitiveType, Literal,
+    Literal, ast::Interval, error_info::ErrorInfo, position::Position, primitive::Data,
+    primitive::PrimitiveType,
 };
-use crate::error_format::*;
+use crate::error_format::gen_error_info;
 use lettre::{
-    message::{header, Mailbox, MultiPart, SinglePart},
+    message::{Mailbox, MultiPart, SinglePart, header},
     transport::smtp::authentication::{Credentials, Mechanism},
 };
+use std::borrow::Cow;
 use std::collections::HashMap;
+use std::hash::BuildHasher;
 ////////////////////////////////////////////////////////////////////////////////
 // PRIVATE FUNCTIONS
 ////////////////////////////////////////////////////////////////////////////////
 
-fn format_email_value<'a>(
-    email: &'a HashMap<String, Literal>,
+fn format_email_value<'a, S: BuildHasher>(
+    email: &'a HashMap<String, Literal, S>,
     value: &'a str,
     additional_info: &'a str,
     data: &'a Data,
     interval: Interval,
 ) -> Result<Option<&'a String>, ErrorInfo> {
-    let error_message = format!(
-        "email [{}] value need to be of type String {}",
-        value, additional_info
-    );
+    let error_message =
+        format!("email [{value}] value need to be of type String {additional_info}");
 
-    match email.get(value) {
-        Some(lit) => {
+    email
+        .get(value)
+        .map(|lit| {
             if lit.primitive.get_type() != PrimitiveType::PrimitiveString {
                 return Err(gen_error_info(
                     Position::new(interval, &data.context.flow),
@@ -33,17 +34,14 @@ fn format_email_value<'a>(
                 ));
             }
 
-            let value = Literal::get_value::<String>(
+            Literal::get_value::<String, _>(
                 &lit.primitive,
                 &data.context.flow,
                 lit.interval,
                 error_message,
-            )?;
-
-            Ok(Some(value))
-        }
-        None => Ok(None),
-    }
+            )
+        })
+        .transpose()
 }
 
 fn parse_email(email_str: &str, data: &Data, interval: Interval) -> Result<Mailbox, ErrorInfo> {
@@ -51,22 +49,22 @@ fn parse_email(email_str: &str, data: &Data, interval: Interval) -> Result<Mailb
         Ok(mbox) => Ok(mbox),
         Err(e) => Err(gen_error_info(
             Position::new(interval, &data.context.flow),
-            format!("Invalid email format: {:?}", e),
+            format!("Invalid email format: {e:?}"),
         )),
     }
 }
 
-fn get_value<'a, T>(
+fn get_value<'a, T, E: Into<Cow<'static, str>>>(
     value: Option<&'a Literal>,
     data: &Data,
-    error_message: String,
+    error_message: E,
     interval: Interval,
 ) -> Result<&'a T, ErrorInfo>
 where
     T: 'static,
 {
     match value {
-        Some(lit) => Literal::get_value::<T>(
+        Some(lit) => Literal::get_value::<T, _>(
             &lit.primitive,
             &data.context.flow,
             lit.interval,
@@ -74,7 +72,7 @@ where
         ),
         None => Err(gen_error_info(
             Position::new(interval, &data.context.flow),
-            error_message,
+            error_message.into().into_owned(),
         )),
     }
 }
@@ -93,15 +91,15 @@ where
 // Non-standard XOAUTH2 mechanism, defined in
 // [xoauth2-protocol](https://developers.google.com/gmail/imap/xoauth2-protocol)
 // Xoauth2,
-fn get_auth_mechanisms(
-    object: &HashMap<String, Literal>,
+fn get_auth_mechanisms<S: BuildHasher>(
+    object: &HashMap<String, Literal, S>,
     data: &Data,
     interval: Interval,
 ) -> Option<Vec<Mechanism>> {
-    let auth_values = get_value::<HashMap<String, Literal>>(
+    let auth_values = get_value::<HashMap<String, Literal>, _>(
         object.get("auth_mechanisms"),
         data,
-        "".to_owned(),
+        String::new(),
         interval,
     )
     .ok()?;
@@ -120,19 +118,15 @@ fn get_auth_mechanisms(
         vec.push(Mechanism::Xoauth2);
     }
 
-    if vec.is_empty() {
-        None
-    } else {
-        Some(vec)
-    }
+    if vec.is_empty() { None } else { Some(vec) }
 }
 
 ////////////////////////////////////////////////////////////////////////////////
 // PUBLIC FUNCTIONS
 ////////////////////////////////////////////////////////////////////////////////
 
-pub fn format_email(
-    email: &HashMap<String, Literal>,
+pub fn format_email<S: BuildHasher>(
+    email: &HashMap<String, Literal, S>,
     data: &Data,
     interval: Interval,
 ) -> Result<lettre::Message, ErrorInfo> {
@@ -170,7 +164,7 @@ pub fn format_email(
 
     let subject = format_email_value(email, "subject", "", data, interval)?;
     if let Some(subject) = subject {
-        message_builder = message_builder.subject(subject.to_owned());
+        message_builder = message_builder.subject(subject.clone());
     }
 
     let text = format_email_value(email, "text", "", data, interval)?;
@@ -209,82 +203,102 @@ pub fn format_email(
     }
 }
 
-pub fn get_mailer(
-    object: &mut HashMap<String, Literal>,
+pub fn get_mailer<S: BuildHasher>(
+    object: &mut HashMap<String, Literal, S>,
     data: &Data,
     interval: Interval,
 ) -> Result<lettre::SmtpTransport, ErrorInfo> {
-    let username = get_value::<String>(
+    let username = get_value::<String, _>(
         object.get("username"),
         data,
-        "username is missing or invalid type".to_owned(),
+        "username is missing or invalid type",
         interval,
     )?;
-    let password = get_value::<String>(
+    let password = get_value::<String, _>(
         object.get("password"),
         data,
-        "password is missing or invalid type".to_owned(),
+        "password is missing or invalid type",
         interval,
     )?;
 
     let auth_mechanisms = get_auth_mechanisms(object, data, interval);
 
-    let starttls: bool =
-        match get_value::<bool>(object.get("starttls"), data, "".to_owned(), interval) {
-            Ok(starttls) => starttls.to_owned(),
-            Err(_) => false,
-        };
-
-    // set default port to [465] for TLS connections. RFC8314](https://tools.ietf.org/html/rfc8314)
-    let port = match get_value::<i64>(object.get("port"), data, "".to_owned(), interval) {
-        Ok(port_value) => port_value.to_owned() as u16,
-        Err(_) => 465,
+    let starttls = if let Some(starttls) = object.get("starttls") {
+        Literal::cast_value::<bool>(starttls.primitive.as_ref())
+            .copied()
+            .ok_or_else(|| {
+                gen_error_info(
+                    Position::new(interval, &data.context.flow),
+                    "invalid starttls value".to_owned(),
+                )
+            })?
+    } else {
+        false
     };
-    let smtp_server = get_value::<String>(
+
+    // Set the default port to [465] for TLS connections.
+    // [RFC8314](https://tools.ietf.org/html/rfc8314)
+    let port = if let Some(port) = object.get("port") {
+        Literal::cast_value::<i64>(port.primitive.as_ref())
+            .and_then(num_traits::ToPrimitive::to_u16)
+            .ok_or_else(|| {
+                gen_error_info(
+                    Position::new(interval, &data.context.flow),
+                    "invalid port".to_owned(),
+                )
+            })?
+    } else {
+        465
+    };
+    let smtp_server = get_value::<String, _>(
         object.get("smtp_server"),
         data,
-        "SMTP server address is missing or invalid type".to_owned(),
+        "SMTP server address is missing or invalid type",
         interval,
     )?;
 
-    let credentials = Credentials::new(username.to_string(), password.to_string());
+    let credentials = Credentials::new(username.clone(), password.clone());
 
-    let is_tls = match get_value::<bool>(object.get("tls"), data, "".to_owned(), interval) {
-        Ok(tls_value) => tls_value.to_owned(),
-        Err(_) => true,
+    let is_tls = if let Some(is_tls) = object.get("tls") {
+        Literal::cast_value::<bool>(is_tls.primitive.as_ref())
+            .copied()
+            .ok_or_else(|| {
+                gen_error_info(
+                    Position::new(interval, &data.context.flow),
+                    "invalid tls value".to_owned(),
+                )
+            })?
+    } else {
+        true
     };
 
-    match is_tls {
-        true => {
-            let smtp_builder = match starttls {
-                true => lettre::SmtpTransport::starttls_relay(smtp_server),
-                _ => lettre::SmtpTransport::relay(smtp_server),
-            };
+    if is_tls {
+        let smtp_builder = if starttls {
+            lettre::SmtpTransport::starttls_relay(smtp_server)
+        } else {
+            lettre::SmtpTransport::relay(smtp_server)
+        };
 
-            match smtp_builder {
-                Ok(smtp_server) => {
-                    let mut smtp_builder = smtp_server.credentials(credentials).port(port);
+        let Ok(smtp_server) = smtp_builder else {
+            return Err(gen_error_info(
+                Position::new(interval, &data.context.flow),
+                "invalid SMTP address".to_owned(),
+            ));
+        };
+        let mut smtp_builder = smtp_server.credentials(credentials).port(port);
 
-                    if let Some(auth_mechanisms) = auth_mechanisms {
-                        smtp_builder = smtp_builder.authentication(auth_mechanisms);
-                    }
-
-                    Ok(smtp_builder.build())
-                }
-                Err(_) => Err(gen_error_info(
-                    Position::new(interval, &data.context.flow),
-                    "invalid SMTP address".to_owned(),
-                )),
-            }
+        if let Some(auth_mechanisms) = auth_mechanisms {
+            smtp_builder = smtp_builder.authentication(auth_mechanisms);
         }
-        false => {
-            let mailer = lettre::SmtpTransport::builder_dangerous(smtp_server)
-                .credentials(credentials)
-                .port(port)
-                .build();
 
-            Ok(mailer)
-        }
+        Ok(smtp_builder.build())
+    } else {
+        let mailer = lettre::SmtpTransport::builder_dangerous(smtp_server)
+            .credentials(credentials)
+            .port(port)
+            .build();
+
+        Ok(mailer)
     }
 }
 
@@ -294,11 +308,11 @@ pub fn get_auth_mechanism(
     interval: Interval,
     usage: &str,
 ) -> Result<String, ErrorInfo> {
-    let value = Literal::get_value::<String>(
+    let value = Literal::get_value::<String, _>(
         &lit.primitive,
         &data.context.flow,
         lit.interval,
-        format!("usage: {}", usage),
+        format!("usage: {usage}"),
     )?;
 
     // "XOAUTH2", "AUTH LOGIN", "PLAIN"

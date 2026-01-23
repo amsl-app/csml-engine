@@ -14,16 +14,13 @@ homepage = "https://www.csml.dev"
 repository = "https://github.com/CSML-by-Clevy/csml-engine"
 keywords = ["chatbot", "programming-language", "csml"]
 categories = ["text-processing"]
-readme = "../README.md"
 license = "Apache-2.0"
-edition = "2018"
+edition = "2024"
 
 [features]
-mongo = ["mongodb", "bson", "futures"]
-dynamo = ["rusoto_core", "rusoto_dynamodb", "rusoto_s3", "serde_dynamodb"]
 postgresql = ["diesel_postgresql"]
 sqlite = ["diesel_sqlite"]
-pooled = ["diesel/r2d2"]
+sea-orm = ["dep:sea-orm", "dep:csml_engine_entity", "dep:csml_engine_db", "async"]
 
 async = ["reqwest", "futures"]
 postgresql-async = ["postgresql", "diesel-async/postgres", "diesel/chrono", "diesel/uuid", "diesel_migrations", "async"]
@@ -36,104 +33,78 @@ rustls = ["ring", "aes-gcm"]
 
 default = ["openssl"]
 
+_dbtest = []
+
 [dependencies.diesel_migrations]
-version = "2.1.0"
+version = "2.2.0"
 optional = true
 
 [dependencies.diesel]
-version = "2.1.0"
+version = "2.2.0"
 optional = true
 
 [dependencies.diesel-async]
-version = "0.4.1"
+version = "0.7.4"
 optional = true
-
-[dependencies.mongodb]
-version = "2.6.0"
-optional = true
-default-features = false
-features = ["sync"]
 
 [dependencies.futures]
-version = "0.3.28"
-optional = true
-
-[dependencies.bson]
-version = "2.0.0"
-features = ["chrono-0_4"]
-optional = true
-
-[dependencies.serde_dynamodb]
-version = "0.9.0"
-default_features = false
-features = ["rustls"]
+version = "0.3.31"
 optional = true
 
 [dependencies.reqwest]
-version = "0.11.18"
+version = "0.12.23"
 features = ["json"]
 optional = true
 
-[dependencies.rusoto_core]
-version = "0.48.0"
-default_features = false
-features = ["rustls"]
-optional = true
-
-[dependencies.rusoto_dynamodb]
-version = "0.48.0"
-default_features = false
-features = ["rustls"]
-optional = true
-
-[dependencies.rusoto_s3]
-version = "0.48.0"
-default_features = false
-features = ["rustls"]
-optional = true
-
 [dependencies.openssl]
-version = "0.10.55"
+version = "0.10.73"
 features = ["vendored"]
 optional = true
 
 [dependencies.ring]
-version = "0.16.20"
+version = "0.17.14"
 optional = true
 
 [dependencies.aes-gcm]
-version = "0.10.1"
+version = "0.10.3"
+optional = true
+
+[dependencies.sea-orm]
+version = "1.1.16"
+features = ["macros", "sqlx-postgres", "sqlx-sqlite", "runtime-tokio-rustls", "with-uuid", "with-json", "debug-print"]
+optional = true
+
+[dependencies.csml_engine_entity]
+path = "../csml_engine_entity"
+optional = true
+
+[dependencies.csml_engine_db]
+path = "../csml_engine_db"
 optional = true
 
 [dependencies]
+async-stream = "0.3.6"
 csml_interpreter = { version = "1.11.2", path = "../csml_interpreter" }
-multimap = "0.9.0"
-md-5 = "0.10.0"
-chrono = { version = "0.4.26", features = ["serde"]}
-rand = "0.8.4"
-uuid = { version = "1.4.1", features = ["serde", "v4", "v7"] }
-serde = { version = "1.0.181", features = ["derive"] }
-serde_derive = "1.0.181"
-serde_json = "1.0.104"
-strum = { version = "0.25.0" , features = ["derive"]}
-regex = "1.8.1"
-base64 = "0.21.2"
+csml_model = { version = "0.1.0", path = "../csml_model" }
+md-5 = "0.10.6"
+chrono = { version = "0.4.42", features = ["serde"]}
+rand = "0.9"
+uuid = { version = "1.18.1", features = ["serde", "v4", "v7"] }
+serde = { version = "1.0.226", features = ["derive"] }
+serde_derive = "1.0.226"
+serde_json = "1.0.145"
+strum = { version = "0.27.2", features = ["derive"]}
+regex = "1.11.2"
+base64 = "0.22.1"
 hex = "0.4.3"
-tokio = "1.29.1"
-typed-builder = "0.15.2"
+typed-builder = "0.23.2"
+tokio = { version = "1.47.1", features = ["rt-multi-thread"] }
 
-ureq = { version = "2.7.1", features = ["json"] }
-bincode = "1.3.3"
-log = "0.4.17"
-env_logger= "0.10.0"
+bincode = "2.0.1"
+tracing = "0.1.41"
+num-traits = "0.2.19"
 
 [dev-dependencies]
-tokio = { version = "1.28.2", features = ["macros"] }
-
-[[example]]
-name = "command_line"
-[[example]]
-name = "fold_bot"
-[[example]]
-name = "get_messages"
-
+tokio = { version = "1.47.1", features = ["macros"] }
+test-log = { version = "0.2.18", default-features = false, features = ["trace"] }
+serial_test = { version = "3.2.0", features = ["file_locks"] }

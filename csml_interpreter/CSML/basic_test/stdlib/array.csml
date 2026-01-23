@@ -176,3 +176,45 @@ array_reduce_index:
     say [1, 2, 3].reduce(0, (x, index) {
         return x + index
     })
+
+array_reverse:
+    do arr = [1, 2, 3, 4, 5]
+    do arr_rev = arr.reverse()
+    say arr
+    say arr_rev
+
+array_reverse_memories:
+    remember arr = [1, 2, 3, 4, 5]
+    remember arr_rev = arr.reverse()
+    say arr
+    say arr_rev
+
+array_reverse_metadata:
+    do arr = _metadata.test.arr
+    do arr_rev = arr.reverse()
+    say arr
+    say arr_rev
+
+array_reverse_metadata_string:
+    do arr = _metadata.test.arr
+    do arr_rev = arr.reverse()
+    say "{{arr}}"
+    say "{{arr_rev}}"
+
+array_equals:
+    do a = [1, 2, 3, 4, 5]
+    do b = [1, 2, 3, 4, 5]
+    if (a == b) {
+        say "equal"
+    } else {
+        say "not equal"
+    }
+
+array_not_equal:
+    do a = [1, 2, 4, 3, 5]
+    do b = [1, 2, 3, 4, 5]
+    if (a == b) {
+        say "equal"
+    } else {
+        say "not equal"
+    }

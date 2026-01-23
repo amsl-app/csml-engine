@@ -1,213 +1,190 @@
 #[cfg(feature = "postgresql-async")]
-use crate::future::db_connectors::{is_postgresql, postgresql_connector};
+use crate::future::db_connectors::postgresql_connector;
 
-use csml_interpreter::data::csml_logs::{csml_logger, CsmlLog, LogLvl};
+#[cfg(feature = "sea-orm")]
+use crate::future::db_connectors::sea_orm_connector;
 
-use crate::error_messages::ERROR_DB_SETUP;
-use crate::future::db_connectors::utils::*;
-use crate::{AsyncConversationInfo, AsyncDatabase, Client, EngineError, Memory};
+use crate::Client;
+use crate::data::{AsyncDatabase, ConversationInfo, EngineError, SeaOrmDbTraits};
+use crate::db_connectors::utils::get_expires_at;
+use csml_interpreter::data::Memory;
+
 use std::collections::HashMap;
 
-pub async fn add_memories(
-    data: &mut AsyncConversationInfo<'_>,
-    memories: &HashMap<String, Memory>,
+pub async fn add_memories<T: SeaOrmDbTraits, S: std::hash::BuildHasher>(
+    data: &mut ConversationInfo,
+    memories: &HashMap<String, Memory, S>,
+    db: &mut AsyncDatabase<'_, T>,
 ) -> Result<(), EngineError> {
-    csml_logger(
-        CsmlLog::new(
-            None,
-            None,
-            None,
-            format!("db call save memories {:?}", memories.keys()),
-        ),
-        LogLvl::Info,
-    );
-    csml_logger(
-        CsmlLog::new(
-            None,
-            None,
-            None,
-            format!("db call save memories {:?}", memories.keys()),
-        ),
-        LogLvl::Debug,
-    );
+    tracing::debug!(memories = ?memories.keys(), "saving memories");
 
-    #[cfg(feature = "postgresql-async")]
-    if is_postgresql() {
-        let expires_at = get_expires_at_for_postgresql(data.ttl);
-        return postgresql_connector::memories::add_memories(data, memories, expires_at).await;
+    match db {
+        #[cfg(feature = "postgresql-async")]
+        AsyncDatabase::Postgresql(db) => {
+            postgresql_connector::memories::add_memories(
+                &data.client,
+                memories,
+                get_expires_at(data.ttl),
+                db,
+            )
+            .await
+        }
+        #[cfg(feature = "sea-orm")]
+        AsyncDatabase::SeaOrm(db) => {
+            sea_orm_connector::memories::add_memories(
+                &data.client,
+                memories,
+                get_expires_at(data.ttl),
+                db.db_ref(),
+            )
+            .await
+        }
+        #[cfg(not(feature = "sea-orm"))]
+        AsyncDatabase::_Impossible(_, _) => unreachable!(),
     }
-
-    Err(EngineError::Manager(ERROR_DB_SETUP.to_owned()))
 }
 
-pub async fn create_client_memory(
+pub async fn create_client_memory<T: SeaOrmDbTraits>(
     client: &Client,
     key: String,
     value: serde_json::Value,
     ttl: Option<chrono::Duration>,
-    db: &mut AsyncDatabase<'_>,
+    db: &mut AsyncDatabase<'_, T>,
 ) -> Result<(), EngineError> {
-    csml_logger(
-        CsmlLog::new(None, None, None, format!("db call save memory {:?}", key)),
-        LogLvl::Info,
-    );
-    csml_logger(
-        CsmlLog::new(
-            None,
-            None,
-            None,
-            format!("db call save memory {:?} with value {:?}", key, value),
-        ),
-        LogLvl::Debug,
-    );
+    tracing::debug!(?client, %key, ?value, "saving memory");
 
-    #[cfg(feature = "postgresql-async")]
-    if is_postgresql() {
-        let db = postgresql_connector::get_db(db)?;
-        let expires_at = get_expires_at_for_postgresql(ttl);
-        return postgresql_connector::memories::create_client_memory(
-            client, &key, &value, expires_at, db,
-        )
-        .await;
+    match db {
+        #[cfg(feature = "postgresql-async")]
+        AsyncDatabase::Postgresql(db) => {
+            postgresql_connector::memories::create_client_memory(
+                client,
+                &key,
+                &value,
+                get_expires_at(ttl),
+                db,
+            )
+            .await
+        }
+        #[cfg(feature = "sea-orm")]
+        AsyncDatabase::SeaOrm(db) => {
+            sea_orm_connector::memories::create_client_memory(
+                client,
+                &key,
+                &value,
+                get_expires_at(ttl),
+                db.db_ref(),
+            )
+            .await
+        }
+        #[cfg(not(feature = "sea-orm"))]
+        AsyncDatabase::_Impossible(_, _) => unreachable!(),
     }
-
-    Err(EngineError::Manager(ERROR_DB_SETUP.to_owned()))
 }
 
-pub async fn internal_use_get_memories(
+pub async fn internal_use_get_memories<T: SeaOrmDbTraits>(
     client: &Client,
-    db: &mut AsyncDatabase<'_>,
+    db: &mut AsyncDatabase<'_, T>,
 ) -> Result<serde_json::Value, EngineError> {
-    csml_logger(
-        CsmlLog::new(None, None, None, "db call get memories".to_string()),
-        LogLvl::Info,
-    );
-    csml_logger(
-        CsmlLog::new(Some(client), None, None, "db call get memories".to_string()),
-        LogLvl::Debug,
-    );
+    tracing::debug!(?client, "getting memories (internal)");
 
-    #[cfg(feature = "postgresql-async")]
-    if is_postgresql() {
-        let db = postgresql_connector::get_db(db)?;
-        return postgresql_connector::memories::internal_use_get_memories(client, db).await;
+    match db {
+        #[cfg(feature = "postgresql-async")]
+        AsyncDatabase::Postgresql(db) => {
+            postgresql_connector::memories::internal_use_get_memories(client, db).await
+        }
+        #[cfg(feature = "sea-orm")]
+        AsyncDatabase::SeaOrm(db) => {
+            sea_orm_connector::memories::internal_use_get_memories(client, db.db_ref()).await
+        }
+        #[cfg(not(feature = "sea-orm"))]
+        AsyncDatabase::_Impossible(_, _) => unreachable!(),
     }
-
-    Err(EngineError::Manager(ERROR_DB_SETUP.to_owned()))
 }
 
 /**
  * Get client Memories
  */
-pub async fn get_memories(
+pub async fn get_memories<T: SeaOrmDbTraits>(
     client: &Client,
-    db: &mut AsyncDatabase<'_>,
+    db: &mut AsyncDatabase<'_, T>,
 ) -> Result<serde_json::Value, EngineError> {
-    csml_logger(
-        CsmlLog::new(None, None, None, "db call get memories client".to_string()),
-        LogLvl::Info,
-    );
-    csml_logger(
-        CsmlLog::new(
-            Some(client),
-            None,
-            None,
-            "db call get memories client".to_string(),
-        ),
-        LogLvl::Debug,
-    );
+    tracing::debug!(?client, "getting memories");
 
-    #[cfg(feature = "postgresql-async")]
-    if is_postgresql() {
-        let db = postgresql_connector::get_db(db)?;
-        return postgresql_connector::memories::get_memories(client, db).await;
+    match db {
+        #[cfg(feature = "postgresql-async")]
+        AsyncDatabase::Postgresql(db) => {
+            postgresql_connector::memories::get_memories(client, db).await
+        }
+        #[cfg(feature = "sea-orm")]
+        AsyncDatabase::SeaOrm(db) => {
+            sea_orm_connector::memories::get_memories(db.db_ref(), client).await
+        }
+        #[cfg(not(feature = "sea-orm"))]
+        AsyncDatabase::_Impossible(_, _) => unreachable!(),
     }
-
-    Err(EngineError::Manager(ERROR_DB_SETUP.to_owned()))
 }
 
 /**
  * Get client Memory
  */
-pub async fn get_memory(
+pub async fn get_memory<T: SeaOrmDbTraits>(
     client: &Client,
     key: &str,
-    db: &mut AsyncDatabase<'_>,
+    db: &mut AsyncDatabase<'_, T>,
 ) -> Result<serde_json::Value, EngineError> {
-    csml_logger(
-        CsmlLog::new(None, None, None, format!("db call get memory {:?}", key)),
-        LogLvl::Info,
-    );
-    csml_logger(
-        CsmlLog::new(
-            Some(client),
-            None,
-            None,
-            format!("db call get memory {:?}", key),
-        ),
-        LogLvl::Debug,
-    );
+    tracing::debug!(key, ?client, "db call get memory");
 
-    #[cfg(feature = "postgresql-async")]
-    if is_postgresql() {
-        let db = postgresql_connector::get_db(db)?;
-        return postgresql_connector::memories::get_memory(client, key, db).await;
+    match db {
+        #[cfg(feature = "postgresql-async")]
+        AsyncDatabase::Postgresql(db) => {
+            postgresql_connector::memories::get_memory(client, key, db).await
+        }
+        #[cfg(feature = "sea-orm")]
+        AsyncDatabase::SeaOrm(db) => {
+            sea_orm_connector::memories::get_memory(db.db_ref(), client, key).await
+        }
+        #[cfg(not(feature = "sea-orm"))]
+        AsyncDatabase::_Impossible(_, _) => unreachable!(),
     }
-
-    Err(EngineError::Manager(ERROR_DB_SETUP.to_owned()))
 }
 
-pub async fn delete_client_memory(
+pub async fn delete_client_memory<T: SeaOrmDbTraits>(
     client: &Client,
     key: &str,
-    db: &mut AsyncDatabase<'_>,
+    db: &mut AsyncDatabase<'_, T>,
 ) -> Result<(), EngineError> {
-    csml_logger(
-        CsmlLog::new(None, None, None, format!("db call delete memory {:?}", key)),
-        LogLvl::Info,
-    );
-    csml_logger(
-        CsmlLog::new(
-            Some(client),
-            None,
-            None,
-            format!("db call delete memory {:?}", key),
-        ),
-        LogLvl::Debug,
-    );
+    tracing::debug!(key, ?client, "db call delete memory");
 
-    #[cfg(feature = "postgresql-async")]
-    if is_postgresql() {
-        let db = postgresql_connector::get_db(db)?;
-        return postgresql_connector::memories::delete_client_memory(client, key, db).await;
+    match db {
+        #[cfg(feature = "postgresql-async")]
+        AsyncDatabase::Postgresql(db) => {
+            postgresql_connector::memories::delete_client_memory(client, key, db).await
+        }
+        #[cfg(feature = "sea-orm")]
+        AsyncDatabase::SeaOrm(db) => {
+            sea_orm_connector::memories::delete_client_memory(client, key, db.db_ref()).await
+        }
+        #[cfg(not(feature = "sea-orm"))]
+        AsyncDatabase::_Impossible(_, _) => unreachable!(),
     }
-
-    Err(EngineError::Manager(ERROR_DB_SETUP.to_owned()))
 }
 
-pub async fn delete_client_memories(
+pub async fn delete_client_memories<T: SeaOrmDbTraits>(
     client: &Client,
-    db: &mut AsyncDatabase<'_>,
+    db: &mut AsyncDatabase<'_, T>,
 ) -> Result<(), EngineError> {
-    csml_logger(
-        CsmlLog::new(None, None, None, "db call delete memories".to_string()),
-        LogLvl::Info,
-    );
-    csml_logger(
-        CsmlLog::new(
-            Some(client),
-            None,
-            None,
-            "db call delete memories".to_string(),
-        ),
-        LogLvl::Debug,
-    );
+    tracing::info!(?client, "db call delete memories");
 
-    #[cfg(feature = "postgresql-async")]
-    if is_postgresql() {
-        let db = postgresql_connector::get_db(db)?;
-        return postgresql_connector::memories::delete_client_memories(client, db).await;
+    match db {
+        #[cfg(feature = "postgresql-async")]
+        AsyncDatabase::Postgresql(db) => {
+            postgresql_connector::memories::delete_client_memories(client, db).await
+        }
+        #[cfg(feature = "sea-orm")]
+        AsyncDatabase::SeaOrm(db) => {
+            sea_orm_connector::memories::delete_client_memories(client, db.db_ref()).await
+        }
+        #[cfg(not(feature = "sea-orm"))]
+        AsyncDatabase::_Impossible(_, _) => unreachable!(),
     }
-
-    Err(EngineError::Manager(ERROR_DB_SETUP.to_owned()))
 }

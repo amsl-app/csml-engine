@@ -1,7 +1,8 @@
-use crate::data::{CsmlFlow, Position};
-use crate::error_format::*;
 use crate::Interval;
+use crate::data::{CsmlFlow, Position};
+use crate::error_format::{ERROR_INVALID_FLOW, ErrorInfo, gen_error_info};
 use serde::{Deserialize, Serialize};
+use uuid::Uuid;
 
 ////////////////////////////////////////////////////////////////////////////////
 // DATA STRUCTURE
@@ -38,7 +39,7 @@ pub struct Module {
 pub struct MultiBot {
     pub id: String,
     pub name: Option<String>,
-    pub version_id: Option<String>,
+    pub version_id: Option<Uuid>,
 }
 
 fn default_version() -> String {
@@ -50,6 +51,8 @@ fn default_version() -> String {
 ////////////////////////////////////////////////////////////////////////////////
 
 impl CsmlBot {
+    #[allow(clippy::too_many_arguments)]
+    #[must_use]
     pub fn new(
         id: &str,
         name: &str,
@@ -62,7 +65,7 @@ impl CsmlBot {
         no_interruption_delay: Option<i32>,
         env: Option<serde_json::Value>,
         modules: Option<Vec<Module>>,
-        multibot: Option<Vec<MultiBot>>,
+        multi_bot: Option<Vec<MultiBot>>,
     ) -> Self {
         Self {
             id: id.to_owned(),
@@ -70,7 +73,7 @@ impl CsmlBot {
             apps_endpoint,
             flows,
             modules,
-            multibot,
+            multibot: multi_bot,
             native_components,
             custom_components,
             default_flow: default_flow.to_owned(),
@@ -80,12 +83,13 @@ impl CsmlBot {
         }
     }
 
+    #[must_use]
     pub fn get_default_flow_name(&self) -> String {
         match self.flows.iter().find(|&val| {
-            val.id.to_ascii_lowercase() == self.default_flow.to_ascii_lowercase()
-                || val.name.to_ascii_lowercase() == self.default_flow.to_ascii_lowercase()
+            val.id.eq_ignore_ascii_case(&self.default_flow)
+                || val.name.eq_ignore_ascii_case(&self.default_flow)
         }) {
-            Some(f) => f.name.to_owned(),
+            Some(f) => f.name.clone(),
             None => unreachable!("default_flow should always be found"),
         }
     }
@@ -97,18 +101,19 @@ impl CsmlBot {
 
 impl CsmlBot {
     pub fn get_flow(&self, name: &str) -> Result<String, Vec<ErrorInfo>> {
-        for flow in self.flows.iter() {
+        for flow in &self.flows {
             if flow.name == name {
-                return Ok(flow.content.to_owned());
+                return Ok(flow.content.clone());
             }
         }
 
         Err(vec![gen_error_info(
             Position::new(Interval::new_as_u32(0, 0, 0, None, None), name),
-            format!("{} {}", ERROR_INVALID_FLOW, name),
+            format!("{ERROR_INVALID_FLOW} {name}"),
         )])
     }
 
+    #[must_use]
     pub fn to_json(&self) -> serde_json::Value {
         let mut map: serde_json::Map<String, serde_json::Value> = serde_json::Map::new();
 

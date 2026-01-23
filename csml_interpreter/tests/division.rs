@@ -7,13 +7,14 @@ use std::collections::HashMap;
 use crate::support::tools::format_message;
 use crate::support::tools::message_to_json_value;
 
+use csml_interpreter::error_format::{ERROR_OPS_DIV_INT, OVERFLOWING_OPERATION};
 use serde_json::Value;
 
 #[test]
 fn ok_division() {
     let data = r#"{"messages":[ {"content":{"text":"2"},"content_type":"text"}],"memories":[]}"#;
     let msg = format_message(
-        Event::new("payload", "", serde_json::json!({})),
+        &Event::new("payload", "", serde_json::json!({})),
         Context::new(
             HashMap::new(),
             HashMap::new(),
@@ -29,14 +30,14 @@ fn ok_division() {
     let v1: Value = message_to_json_value(msg);
     let v2: Value = serde_json::from_str(data).unwrap();
 
-    assert_eq!(v1, v2)
+    assert_eq!(v1, v2);
 }
 
 #[test]
 fn ok_division_2() {
     let data = r#"{"messages":[ {"content":{"text":"21.333333333333332"},"content_type":"text"}],"memories":[]}"#;
     let msg = format_message(
-        Event::new("payload", "", serde_json::json!({})),
+        &Event::new("payload", "", serde_json::json!({})),
         Context::new(
             HashMap::new(),
             HashMap::new(),
@@ -52,7 +53,7 @@ fn ok_division_2() {
     let v1: Value = message_to_json_value(msg);
     let v2: Value = serde_json::from_str(data).unwrap();
 
-    assert_eq!(v1, v2)
+    assert_eq!(v1, v2);
 }
 
 // fn check_error_component(vec: &[Message]) -> bool {
@@ -61,38 +62,65 @@ fn ok_division_2() {
 //     return comp.content.is_object();
 // }
 
-// #[test]
-// fn ok_division_3() {
-// let file = format!("CSML/basic_test/numerical_operation/{}", "division.csml");
-// let text = read_file(file).unwrap();
+#[test]
+fn ok_division_3() {
+    let msg = format_message(
+        &Event::new("payload", "", serde_json::json!({})),
+        Context::new(
+            HashMap::new(),
+            HashMap::new(),
+            None,
+            None,
+            "div3",
+            "flow",
+            None,
+        ),
+        "CSML/basic_test/numerical_operation/division.csml",
+    );
 
-// let context = gen_context(serde_json::json!({}), serde_json::json!({}));
-//     let msg = format_message(
-//         Event::new("payload", "", serde_json::json!({})),
-// ContextJson::new(
-//             serde_json::json!({}),
-//             serde_json::json!({}),
-//             None,
-//             None,
-//             "simple_0",
-//             "flow", None,
-//         ),
-//         "CSML/basic_test/numerical_operation/division.csml",
-//         "div3"
-//     );
+    println!("{msg:#?}");
+    assert!(
+        msg.messages
+            .first()
+            .unwrap()
+            .content
+            .get("error")
+            .unwrap()
+            .as_str()
+            .unwrap()
+            .contains(ERROR_OPS_DIV_INT)
+    );
+}
 
-//     match &interpret(&text, "div3", context, &gen_event(""), None) {
-//         MessageData {
-//             memories: None,
-//             messages: vec,
-//             next_flow: None,
-//             next_step: None,
-//             hold: None,
-//             ..
-//         } if vec.len() == 1 && check_error_component(&vec) => {}
-//         e => panic!("Error in div by 0 {:?}", e),
-//     }
-// }
+#[test]
+fn ok_division_overflow() {
+    let msg = format_message(
+        &Event::new("payload", "", serde_json::json!({})),
+        Context::new(
+            HashMap::new(),
+            HashMap::new(),
+            None,
+            None,
+            "div_overflow",
+            "flow",
+            None,
+        ),
+        "CSML/basic_test/numerical_operation/division.csml",
+    );
+
+    println!("{msg:#?}");
+    assert!(
+        msg.messages
+            .first()
+            .unwrap()
+            .content
+            .get("error")
+            .unwrap()
+            .as_str()
+            .unwrap()
+            .contains(OVERFLOWING_OPERATION)
+    );
+}
 
 ////////////////////////////////////////////////////////////////////////////////
 /// ARRAY
@@ -101,7 +129,7 @@ fn ok_division_2() {
 #[test]
 fn division_array_step_0() {
     let msg = format_message(
-        Event::new("payload", "", serde_json::json!({})),
+        &Event::new("payload", "", serde_json::json!({})),
         Context::new(
             HashMap::new(),
             HashMap::new(),
@@ -114,27 +142,27 @@ fn division_array_step_0() {
         "CSML/basic_test/numerical_operation/division.csml",
     );
 
-    let value: Value = message_to_json_value(msg.to_owned());
+    let value: Value = message_to_json_value(msg.clone());
 
     if let Some(value) = value.get("messages") {
         if let Some(value) = value.get(0) {
             if let Some(value) = value.get("content_type") {
                 if value == "error" {
-                    return assert!(true);
+                    return;
                 }
             }
         }
     }
 
-    println!("{:#?}", value);
+    println!("{value:#?}");
 
-    assert!(false)
+    panic!("unexpected result")
 }
 
 #[test]
 fn division_array_step_1() {
     let msg = format_message(
-        Event::new("payload", "", serde_json::json!({})),
+        &Event::new("payload", "", serde_json::json!({})),
         Context::new(
             HashMap::new(),
             HashMap::new(),
@@ -147,27 +175,27 @@ fn division_array_step_1() {
         "CSML/basic_test/numerical_operation/division.csml",
     );
 
-    let value: Value = message_to_json_value(msg.to_owned());
+    let value: Value = message_to_json_value(msg.clone());
 
     if let Some(value) = value.get("messages") {
         if let Some(value) = value.get(0) {
             if let Some(value) = value.get("content_type") {
                 if value == "error" {
-                    return assert!(true);
+                    return;
                 }
             }
         }
     }
 
-    println!("{:#?}", value);
+    println!("{value:#?}");
 
-    assert!(false)
+    panic!("unexpected result")
 }
 
 #[test]
 fn division_array_step_2() {
     let msg = format_message(
-        Event::new("payload", "", serde_json::json!({})),
+        &Event::new("payload", "", serde_json::json!({})),
         Context::new(
             HashMap::new(),
             HashMap::new(),
@@ -180,27 +208,27 @@ fn division_array_step_2() {
         "CSML/basic_test/numerical_operation/division.csml",
     );
 
-    let value: Value = message_to_json_value(msg.to_owned());
+    let value: Value = message_to_json_value(msg.clone());
 
     if let Some(value) = value.get("messages") {
         if let Some(value) = value.get(0) {
             if let Some(value) = value.get("content_type") {
                 if value == "error" {
-                    return assert!(true);
+                    return;
                 }
             }
         }
     }
 
-    println!("{:#?}", value);
+    println!("{value:#?}");
 
-    assert!(false)
+    panic!("unexpected result")
 }
 
 #[test]
 fn division_array_step_3() {
     let msg = format_message(
-        Event::new("payload", "", serde_json::json!({})),
+        &Event::new("payload", "", serde_json::json!({})),
         Context::new(
             HashMap::new(),
             HashMap::new(),
@@ -213,27 +241,27 @@ fn division_array_step_3() {
         "CSML/basic_test/numerical_operation/division.csml",
     );
 
-    let value: Value = message_to_json_value(msg.to_owned());
+    let value: Value = message_to_json_value(msg.clone());
 
     if let Some(value) = value.get("messages") {
         if let Some(value) = value.get(0) {
             if let Some(value) = value.get("content_type") {
                 if value == "error" {
-                    return assert!(true);
+                    return;
                 }
             }
         }
     }
 
-    println!("{:#?}", value);
+    println!("{value:#?}");
 
-    assert!(false)
+    panic!("unexpected result")
 }
 
 #[test]
 fn division_array_step_4() {
     let msg = format_message(
-        Event::new("payload", "", serde_json::json!({})),
+        &Event::new("payload", "", serde_json::json!({})),
         Context::new(
             HashMap::new(),
             HashMap::new(),
@@ -246,27 +274,27 @@ fn division_array_step_4() {
         "CSML/basic_test/numerical_operation/division.csml",
     );
 
-    let value: Value = message_to_json_value(msg.to_owned());
+    let value: Value = message_to_json_value(msg.clone());
 
     if let Some(value) = value.get("messages") {
         if let Some(value) = value.get(0) {
             if let Some(value) = value.get("content_type") {
                 if value == "error" {
-                    return assert!(true);
+                    return;
                 }
             }
         }
     }
 
-    println!("{:#?}", value);
+    println!("{value:#?}");
 
-    assert!(false)
+    panic!("unexpected result")
 }
 
 #[test]
 fn division_array_step_5() {
     let msg = format_message(
-        Event::new("payload", "", serde_json::json!({})),
+        &Event::new("payload", "", serde_json::json!({})),
         Context::new(
             HashMap::new(),
             HashMap::new(),
@@ -279,27 +307,27 @@ fn division_array_step_5() {
         "CSML/basic_test/numerical_operation/division.csml",
     );
 
-    let value: Value = message_to_json_value(msg.to_owned());
+    let value: Value = message_to_json_value(msg.clone());
 
     if let Some(value) = value.get("messages") {
         if let Some(value) = value.get(0) {
             if let Some(value) = value.get("content_type") {
                 if value == "error" {
-                    return assert!(true);
+                    return;
                 }
             }
         }
     }
 
-    println!("{:#?}", value);
+    println!("{value:#?}");
 
-    assert!(false)
+    panic!("unexpected result")
 }
 
 #[test]
 fn division_array_step_6() {
     let msg = format_message(
-        Event::new("payload", "", serde_json::json!({})),
+        &Event::new("payload", "", serde_json::json!({})),
         Context::new(
             HashMap::new(),
             HashMap::new(),
@@ -312,21 +340,21 @@ fn division_array_step_6() {
         "CSML/basic_test/numerical_operation/division.csml",
     );
 
-    let value: Value = message_to_json_value(msg.to_owned());
+    let value: Value = message_to_json_value(msg.clone());
 
     if let Some(value) = value.get("messages") {
         if let Some(value) = value.get(0) {
             if let Some(value) = value.get("content_type") {
                 if value == "error" {
-                    return assert!(true);
+                    return;
                 }
             }
         }
     }
 
-    println!("{:#?}", value);
+    println!("{value:#?}");
 
-    assert!(false)
+    panic!("unexpected result")
 }
 
 ////////////////////////////////////////////////////////////////////////////////
@@ -336,7 +364,7 @@ fn division_array_step_6() {
 #[test]
 fn division_boolean_step_0() {
     let msg = format_message(
-        Event::new("payload", "", serde_json::json!({})),
+        &Event::new("payload", "", serde_json::json!({})),
         Context::new(
             HashMap::new(),
             HashMap::new(),
@@ -349,27 +377,27 @@ fn division_boolean_step_0() {
         "CSML/basic_test/numerical_operation/division.csml",
     );
 
-    let value: Value = message_to_json_value(msg.to_owned());
+    let value: Value = message_to_json_value(msg.clone());
 
     if let Some(value) = value.get("messages") {
         if let Some(value) = value.get(0) {
             if let Some(value) = value.get("content_type") {
                 if value == "error" {
-                    return assert!(true);
+                    return;
                 }
             }
         }
     }
 
-    println!("{:#?}", value);
+    println!("{value:#?}");
 
-    assert!(false)
+    panic!("unexpected result")
 }
 
 #[test]
 fn division_boolean_step_1() {
     let msg = format_message(
-        Event::new("payload", "", serde_json::json!({})),
+        &Event::new("payload", "", serde_json::json!({})),
         Context::new(
             HashMap::new(),
             HashMap::new(),
@@ -382,27 +410,27 @@ fn division_boolean_step_1() {
         "CSML/basic_test/numerical_operation/division.csml",
     );
 
-    let value: Value = message_to_json_value(msg.to_owned());
+    let value: Value = message_to_json_value(msg.clone());
 
     if let Some(value) = value.get("messages") {
         if let Some(value) = value.get(0) {
             if let Some(value) = value.get("content_type") {
                 if value == "error" {
-                    return assert!(true);
+                    return;
                 }
             }
         }
     }
 
-    println!("{:#?}", value);
+    println!("{value:#?}");
 
-    assert!(false)
+    panic!("unexpected result")
 }
 
 #[test]
 fn division_boolean_step_2() {
     let msg = format_message(
-        Event::new("payload", "", serde_json::json!({})),
+        &Event::new("payload", "", serde_json::json!({})),
         Context::new(
             HashMap::new(),
             HashMap::new(),
@@ -415,27 +443,27 @@ fn division_boolean_step_2() {
         "CSML/basic_test/numerical_operation/division.csml",
     );
 
-    let value: Value = message_to_json_value(msg.to_owned());
+    let value: Value = message_to_json_value(msg.clone());
 
     if let Some(value) = value.get("messages") {
         if let Some(value) = value.get(0) {
             if let Some(value) = value.get("content_type") {
                 if value == "error" {
-                    return assert!(true);
+                    return;
                 }
             }
         }
     }
 
-    println!("{:#?}", value);
+    println!("{value:#?}");
 
-    assert!(false)
+    panic!("unexpected result")
 }
 
 #[test]
 fn division_boolean_step_3() {
     let msg = format_message(
-        Event::new("payload", "", serde_json::json!({})),
+        &Event::new("payload", "", serde_json::json!({})),
         Context::new(
             HashMap::new(),
             HashMap::new(),
@@ -448,27 +476,27 @@ fn division_boolean_step_3() {
         "CSML/basic_test/numerical_operation/division.csml",
     );
 
-    let value: Value = message_to_json_value(msg.to_owned());
+    let value: Value = message_to_json_value(msg.clone());
 
     if let Some(value) = value.get("messages") {
         if let Some(value) = value.get(0) {
             if let Some(value) = value.get("content_type") {
                 if value == "error" {
-                    return assert!(true);
+                    return;
                 }
             }
         }
     }
 
-    println!("{:#?}", value);
+    println!("{value:#?}");
 
-    assert!(false)
+    panic!("unexpected result")
 }
 
 #[test]
 fn division_boolean_step_4() {
     let msg = format_message(
-        Event::new("payload", "", serde_json::json!({})),
+        &Event::new("payload", "", serde_json::json!({})),
         Context::new(
             HashMap::new(),
             HashMap::new(),
@@ -481,27 +509,27 @@ fn division_boolean_step_4() {
         "CSML/basic_test/numerical_operation/division.csml",
     );
 
-    let value: Value = message_to_json_value(msg.to_owned());
+    let value: Value = message_to_json_value(msg.clone());
 
     if let Some(value) = value.get("messages") {
         if let Some(value) = value.get(0) {
             if let Some(value) = value.get("content_type") {
                 if value == "error" {
-                    return assert!(true);
+                    return;
                 }
             }
         }
     }
 
-    println!("{:#?}", value);
+    println!("{value:#?}");
 
-    assert!(false)
+    panic!("unexpected result")
 }
 
 #[test]
 fn division_boolean_step_5() {
     let msg = format_message(
-        Event::new("payload", "", serde_json::json!({})),
+        &Event::new("payload", "", serde_json::json!({})),
         Context::new(
             HashMap::new(),
             HashMap::new(),
@@ -514,27 +542,27 @@ fn division_boolean_step_5() {
         "CSML/basic_test/numerical_operation/division.csml",
     );
 
-    let value: Value = message_to_json_value(msg.to_owned());
+    let value: Value = message_to_json_value(msg.clone());
 
     if let Some(value) = value.get("messages") {
         if let Some(value) = value.get(0) {
             if let Some(value) = value.get("content_type") {
                 if value == "error" {
-                    return assert!(true);
+                    return;
                 }
             }
         }
     }
 
-    println!("{:#?}", value);
+    println!("{value:#?}");
 
-    assert!(false)
+    panic!("unexpected result")
 }
 
 #[test]
 fn division_boolean_step_6() {
     let msg = format_message(
-        Event::new("payload", "", serde_json::json!({})),
+        &Event::new("payload", "", serde_json::json!({})),
         Context::new(
             HashMap::new(),
             HashMap::new(),
@@ -547,21 +575,21 @@ fn division_boolean_step_6() {
         "CSML/basic_test/numerical_operation/division.csml",
     );
 
-    let value: Value = message_to_json_value(msg.to_owned());
+    let value: Value = message_to_json_value(msg.clone());
 
     if let Some(value) = value.get("messages") {
         if let Some(value) = value.get(0) {
             if let Some(value) = value.get("content_type") {
                 if value == "error" {
-                    return assert!(true);
+                    return;
                 }
             }
         }
     }
 
-    println!("{:#?}", value);
+    println!("{value:#?}");
 
-    assert!(false)
+    panic!("unexpected result")
 }
 
 ////////////////////////////////////////////////////////////////////////////////
@@ -571,7 +599,7 @@ fn division_boolean_step_6() {
 #[test]
 fn division_float_step_0() {
     let msg = format_message(
-        Event::new("payload", "", serde_json::json!({})),
+        &Event::new("payload", "", serde_json::json!({})),
         Context::new(
             HashMap::new(),
             HashMap::new(),
@@ -584,27 +612,27 @@ fn division_float_step_0() {
         "CSML/basic_test/numerical_operation/division.csml",
     );
 
-    let value: Value = message_to_json_value(msg.to_owned());
+    let value: Value = message_to_json_value(msg.clone());
 
     if let Some(value) = value.get("messages") {
         if let Some(value) = value.get(0) {
             if let Some(value) = value.get("content_type") {
                 if value == "error" {
-                    return assert!(true);
+                    return;
                 }
             }
         }
     }
 
-    println!("{:#?}", value);
+    println!("{value:#?}");
 
-    assert!(false)
+    panic!("unexpected result")
 }
 
 #[test]
 fn division_float_step_1() {
     let msg = format_message(
-        Event::new("payload", "", serde_json::json!({})),
+        &Event::new("payload", "", serde_json::json!({})),
         Context::new(
             HashMap::new(),
             HashMap::new(),
@@ -617,21 +645,21 @@ fn division_float_step_1() {
         "CSML/basic_test/numerical_operation/division.csml",
     );
 
-    let value: Value = message_to_json_value(msg.to_owned());
+    let value: Value = message_to_json_value(msg.clone());
 
     if let Some(value) = value.get("messages") {
         if let Some(value) = value.get(0) {
             if let Some(value) = value.get("content_type") {
                 if value == "error" {
-                    return assert!(true);
+                    return;
                 }
             }
         }
     }
 
-    println!("{:#?}", value);
+    println!("{value:#?}");
 
-    assert!(false)
+    panic!("unexpected result")
 }
 
 #[test]
@@ -643,7 +671,7 @@ fn division_float_step_2() {
             {"content":{"text": "1"}, "content_type":"text"}
         ]}"#;
     let msg = format_message(
-        Event::new("payload", "", serde_json::json!({})),
+        &Event::new("payload", "", serde_json::json!({})),
         Context::new(
             HashMap::new(),
             HashMap::new(),
@@ -659,7 +687,7 @@ fn division_float_step_2() {
     let v1: Value = message_to_json_value(msg);
     let v2: Value = serde_json::from_str(data).unwrap();
 
-    assert_eq!(v1, v2)
+    assert_eq!(v1, v2);
 }
 
 #[test]
@@ -671,7 +699,7 @@ fn division_float_step_3() {
             {"content":{"text": "1"}, "content_type":"text"}
         ]}"#;
     let msg = format_message(
-        Event::new("payload", "", serde_json::json!({})),
+        &Event::new("payload", "", serde_json::json!({})),
         Context::new(
             HashMap::new(),
             HashMap::new(),
@@ -687,13 +715,13 @@ fn division_float_step_3() {
     let v1: Value = message_to_json_value(msg);
     let v2: Value = serde_json::from_str(data).unwrap();
 
-    assert_eq!(v1, v2)
+    assert_eq!(v1, v2);
 }
 
 #[test]
 fn division_float_step_4() {
     let msg = format_message(
-        Event::new("payload", "", serde_json::json!({})),
+        &Event::new("payload", "", serde_json::json!({})),
         Context::new(
             HashMap::new(),
             HashMap::new(),
@@ -706,27 +734,27 @@ fn division_float_step_4() {
         "CSML/basic_test/numerical_operation/division.csml",
     );
 
-    let value: Value = message_to_json_value(msg.to_owned());
+    let value: Value = message_to_json_value(msg.clone());
 
     if let Some(value) = value.get("messages") {
         if let Some(value) = value.get(0) {
             if let Some(value) = value.get("content_type") {
                 if value == "error" {
-                    return assert!(true);
+                    return;
                 }
             }
         }
     }
 
-    println!("{:#?}", value);
+    println!("{value:#?}");
 
-    assert!(false)
+    panic!("unexpected result")
 }
 
 #[test]
 fn division_float_step_5() {
     let msg = format_message(
-        Event::new("payload", "", serde_json::json!({})),
+        &Event::new("payload", "", serde_json::json!({})),
         Context::new(
             HashMap::new(),
             HashMap::new(),
@@ -739,21 +767,21 @@ fn division_float_step_5() {
         "CSML/basic_test/numerical_operation/division.csml",
     );
 
-    let value: Value = message_to_json_value(msg.to_owned());
+    let value: Value = message_to_json_value(msg.clone());
 
     if let Some(value) = value.get("messages") {
         if let Some(value) = value.get(0) {
             if let Some(value) = value.get("content_type") {
                 if value == "error" {
-                    return assert!(true);
+                    return;
                 }
             }
         }
     }
 
-    println!("{:#?}", value);
+    println!("{value:#?}");
 
-    assert!(false)
+    panic!("unexpected result")
 }
 
 #[test]
@@ -765,7 +793,7 @@ fn division_float_step_6() {
             {"content":{"text": "1"}, "content_type":"text"}
         ]}"#;
     let msg = format_message(
-        Event::new("payload", "", serde_json::json!({})),
+        &Event::new("payload", "", serde_json::json!({})),
         Context::new(
             HashMap::new(),
             HashMap::new(),
@@ -781,7 +809,7 @@ fn division_float_step_6() {
     let v1: Value = message_to_json_value(msg);
     let v2: Value = serde_json::from_str(data).unwrap();
 
-    assert_eq!(v1, v2)
+    assert_eq!(v1, v2);
 }
 
 /////////////////////////////////////////////////////////////////////////////////
@@ -791,7 +819,7 @@ fn division_float_step_6() {
 #[test]
 fn division_int_step_0() {
     let msg = format_message(
-        Event::new("payload", "", serde_json::json!({})),
+        &Event::new("payload", "", serde_json::json!({})),
         Context::new(
             HashMap::new(),
             HashMap::new(),
@@ -804,27 +832,27 @@ fn division_int_step_0() {
         "CSML/basic_test/numerical_operation/division.csml",
     );
 
-    let value: Value = message_to_json_value(msg.to_owned());
+    let value: Value = message_to_json_value(msg.clone());
 
     if let Some(value) = value.get("messages") {
         if let Some(value) = value.get(0) {
             if let Some(value) = value.get("content_type") {
                 if value == "error" {
-                    return assert!(true);
+                    return;
                 }
             }
         }
     }
 
-    println!("{:#?}", value);
+    println!("{value:#?}");
 
-    assert!(false)
+    panic!("unexpected result")
 }
 
 #[test]
 fn division_int_step_1() {
     let msg = format_message(
-        Event::new("payload", "", serde_json::json!({})),
+        &Event::new("payload", "", serde_json::json!({})),
         Context::new(
             HashMap::new(),
             HashMap::new(),
@@ -837,21 +865,21 @@ fn division_int_step_1() {
         "CSML/basic_test/numerical_operation/division.csml",
     );
 
-    let value: Value = message_to_json_value(msg.to_owned());
+    let value: Value = message_to_json_value(msg.clone());
 
     if let Some(value) = value.get("messages") {
         if let Some(value) = value.get(0) {
             if let Some(value) = value.get("content_type") {
                 if value == "error" {
-                    return assert!(true);
+                    return;
                 }
             }
         }
     }
 
-    println!("{:#?}", value);
+    println!("{value:#?}");
 
-    assert!(false)
+    panic!("unexpected result")
 }
 
 #[test]
@@ -863,7 +891,7 @@ fn division_int_step_2() {
             {"content":{"text": "1"}, "content_type":"text"}
         ]}"#;
     let msg = format_message(
-        Event::new("payload", "", serde_json::json!({})),
+        &Event::new("payload", "", serde_json::json!({})),
         Context::new(
             HashMap::new(),
             HashMap::new(),
@@ -879,7 +907,7 @@ fn division_int_step_2() {
     let v1: Value = message_to_json_value(msg);
     let v2: Value = serde_json::from_str(data).unwrap();
 
-    assert_eq!(v1, v2)
+    assert_eq!(v1, v2);
 }
 
 #[test]
@@ -891,7 +919,7 @@ fn division_int_step_3() {
             {"content":{"text": "1"}, "content_type":"text"}
         ]}"#;
     let msg = format_message(
-        Event::new("payload", "", serde_json::json!({})),
+        &Event::new("payload", "", serde_json::json!({})),
         Context::new(
             HashMap::new(),
             HashMap::new(),
@@ -907,13 +935,13 @@ fn division_int_step_3() {
     let v1: Value = message_to_json_value(msg);
     let v2: Value = serde_json::from_str(data).unwrap();
 
-    assert_eq!(v1, v2)
+    assert_eq!(v1, v2);
 }
 
 #[test]
 fn division_int_step_4() {
     let msg = format_message(
-        Event::new("payload", "", serde_json::json!({})),
+        &Event::new("payload", "", serde_json::json!({})),
         Context::new(
             HashMap::new(),
             HashMap::new(),
@@ -926,27 +954,27 @@ fn division_int_step_4() {
         "CSML/basic_test/numerical_operation/division.csml",
     );
 
-    let value: Value = message_to_json_value(msg.to_owned());
+    let value: Value = message_to_json_value(msg.clone());
 
     if let Some(value) = value.get("messages") {
         if let Some(value) = value.get(0) {
             if let Some(value) = value.get("content_type") {
                 if value == "error" {
-                    return assert!(true);
+                    return;
                 }
             }
         }
     }
 
-    println!("{:#?}", value);
+    println!("{value:#?}");
 
-    assert!(false)
+    panic!("unexpected result")
 }
 
 #[test]
 fn division_int_step_5() {
     let msg = format_message(
-        Event::new("payload", "", serde_json::json!({})),
+        &Event::new("payload", "", serde_json::json!({})),
         Context::new(
             HashMap::new(),
             HashMap::new(),
@@ -959,21 +987,21 @@ fn division_int_step_5() {
         "CSML/basic_test/numerical_operation/division.csml",
     );
 
-    let value: Value = message_to_json_value(msg.to_owned());
+    let value: Value = message_to_json_value(msg.clone());
 
     if let Some(value) = value.get("messages") {
         if let Some(value) = value.get(0) {
             if let Some(value) = value.get("content_type") {
                 if value == "error" {
-                    return assert!(true);
+                    return;
                 }
             }
         }
     }
 
-    println!("{:#?}", value);
+    println!("{value:#?}");
 
-    assert!(false)
+    panic!("unexpected result")
 }
 
 #[test]
@@ -985,7 +1013,7 @@ fn division_int_step_6() {
             {"content":{"text": "1"}, "content_type":"text"}
         ]}"#;
     let msg = format_message(
-        Event::new("payload", "", serde_json::json!({})),
+        &Event::new("payload", "", serde_json::json!({})),
         Context::new(
             HashMap::new(),
             HashMap::new(),
@@ -1001,7 +1029,7 @@ fn division_int_step_6() {
     let v1: Value = message_to_json_value(msg);
     let v2: Value = serde_json::from_str(data).unwrap();
 
-    assert_eq!(v1, v2)
+    assert_eq!(v1, v2);
 }
 
 ////////////////////////////////////////////////////////////////////////////////
@@ -1011,7 +1039,7 @@ fn division_int_step_6() {
 #[test]
 fn division_null_step_0() {
     let msg = format_message(
-        Event::new("payload", "", serde_json::json!({})),
+        &Event::new("payload", "", serde_json::json!({})),
         Context::new(
             HashMap::new(),
             HashMap::new(),
@@ -1024,27 +1052,27 @@ fn division_null_step_0() {
         "CSML/basic_test/numerical_operation/division.csml",
     );
 
-    let value: Value = message_to_json_value(msg.to_owned());
+    let value: Value = message_to_json_value(msg.clone());
 
     if let Some(value) = value.get("messages") {
         if let Some(value) = value.get(0) {
             if let Some(value) = value.get("content_type") {
                 if value == "error" {
-                    return assert!(true);
+                    return;
                 }
             }
         }
     }
 
-    println!("{:#?}", value);
+    println!("{value:#?}");
 
-    assert!(false)
+    panic!("unexpected result")
 }
 
 #[test]
 fn division_null_step_1() {
     let msg = format_message(
-        Event::new("payload", "", serde_json::json!({})),
+        &Event::new("payload", "", serde_json::json!({})),
         Context::new(
             HashMap::new(),
             HashMap::new(),
@@ -1057,27 +1085,27 @@ fn division_null_step_1() {
         "CSML/basic_test/numerical_operation/division.csml",
     );
 
-    let value: Value = message_to_json_value(msg.to_owned());
+    let value: Value = message_to_json_value(msg.clone());
 
     if let Some(value) = value.get("messages") {
         if let Some(value) = value.get(0) {
             if let Some(value) = value.get("content_type") {
                 if value == "error" {
-                    return assert!(true);
+                    return;
                 }
             }
         }
     }
 
-    println!("{:#?}", value);
+    println!("{value:#?}");
 
-    assert!(false)
+    panic!("unexpected result")
 }
 
 #[test]
 fn division_null_step_2() {
     let msg = format_message(
-        Event::new("payload", "", serde_json::json!({})),
+        &Event::new("payload", "", serde_json::json!({})),
         Context::new(
             HashMap::new(),
             HashMap::new(),
@@ -1090,27 +1118,27 @@ fn division_null_step_2() {
         "CSML/basic_test/numerical_operation/division.csml",
     );
 
-    let value: Value = message_to_json_value(msg.to_owned());
+    let value: Value = message_to_json_value(msg.clone());
 
     if let Some(value) = value.get("messages") {
         if let Some(value) = value.get(0) {
             if let Some(value) = value.get("content_type") {
                 if value == "error" {
-                    return assert!(true);
+                    return;
                 }
             }
         }
     }
 
-    println!("{:#?}", value);
+    println!("{value:#?}");
 
-    assert!(false)
+    panic!("unexpected result")
 }
 
 #[test]
 fn division_null_step_3() {
     let msg = format_message(
-        Event::new("payload", "", serde_json::json!({})),
+        &Event::new("payload", "", serde_json::json!({})),
         Context::new(
             HashMap::new(),
             HashMap::new(),
@@ -1123,27 +1151,27 @@ fn division_null_step_3() {
         "CSML/basic_test/numerical_operation/division.csml",
     );
 
-    let value: Value = message_to_json_value(msg.to_owned());
+    let value: Value = message_to_json_value(msg.clone());
 
     if let Some(value) = value.get("messages") {
         if let Some(value) = value.get(0) {
             if let Some(value) = value.get("content_type") {
                 if value == "error" {
-                    return assert!(true);
+                    return;
                 }
             }
         }
     }
 
-    println!("{:#?}", value);
+    println!("{value:#?}");
 
-    assert!(false)
+    panic!("unexpected result")
 }
 
 #[test]
 fn division_null_step_4() {
     let msg = format_message(
-        Event::new("payload", "", serde_json::json!({})),
+        &Event::new("payload", "", serde_json::json!({})),
         Context::new(
             HashMap::new(),
             HashMap::new(),
@@ -1156,27 +1184,27 @@ fn division_null_step_4() {
         "CSML/basic_test/numerical_operation/division.csml",
     );
 
-    let value: Value = message_to_json_value(msg.to_owned());
+    let value: Value = message_to_json_value(msg.clone());
 
     if let Some(value) = value.get("messages") {
         if let Some(value) = value.get(0) {
             if let Some(value) = value.get("content_type") {
                 if value == "error" {
-                    return assert!(true);
+                    return;
                 }
             }
         }
     }
 
-    println!("{:#?}", value);
+    println!("{value:#?}");
 
-    assert!(false)
+    panic!("unexpected result")
 }
 
 #[test]
 fn division_null_step_5() {
     let msg = format_message(
-        Event::new("payload", "", serde_json::json!({})),
+        &Event::new("payload", "", serde_json::json!({})),
         Context::new(
             HashMap::new(),
             HashMap::new(),
@@ -1189,27 +1217,27 @@ fn division_null_step_5() {
         "CSML/basic_test/numerical_operation/division.csml",
     );
 
-    let value: Value = message_to_json_value(msg.to_owned());
+    let value: Value = message_to_json_value(msg.clone());
 
     if let Some(value) = value.get("messages") {
         if let Some(value) = value.get(0) {
             if let Some(value) = value.get("content_type") {
                 if value == "error" {
-                    return assert!(true);
+                    return;
                 }
             }
         }
     }
 
-    println!("{:#?}", value);
+    println!("{value:#?}");
 
-    assert!(false)
+    panic!("unexpected result")
 }
 
 #[test]
 fn division_null_step_6() {
     let msg = format_message(
-        Event::new("payload", "", serde_json::json!({})),
+        &Event::new("payload", "", serde_json::json!({})),
         Context::new(
             HashMap::new(),
             HashMap::new(),
@@ -1222,21 +1250,21 @@ fn division_null_step_6() {
         "CSML/basic_test/numerical_operation/division.csml",
     );
 
-    let value: Value = message_to_json_value(msg.to_owned());
+    let value: Value = message_to_json_value(msg.clone());
 
     if let Some(value) = value.get("messages") {
         if let Some(value) = value.get(0) {
             if let Some(value) = value.get("content_type") {
                 if value == "error" {
-                    return assert!(true);
+                    return;
                 }
             }
         }
     }
 
-    println!("{:#?}", value);
+    println!("{value:#?}");
 
-    assert!(false)
+    panic!("unexpected result")
 }
 
 ////////////////////////////////////////////////////////////////////////////////
@@ -1246,7 +1274,7 @@ fn division_null_step_6() {
 #[test]
 fn division_object_step_0() {
     let msg = format_message(
-        Event::new("payload", "", serde_json::json!({})),
+        &Event::new("payload", "", serde_json::json!({})),
         Context::new(
             HashMap::new(),
             HashMap::new(),
@@ -1259,27 +1287,27 @@ fn division_object_step_0() {
         "CSML/basic_test/numerical_operation/division.csml",
     );
 
-    let value: Value = message_to_json_value(msg.to_owned());
+    let value: Value = message_to_json_value(msg.clone());
 
     if let Some(value) = value.get("messages") {
         if let Some(value) = value.get(0) {
             if let Some(value) = value.get("content_type") {
                 if value == "error" {
-                    return assert!(true);
+                    return;
                 }
             }
         }
     }
 
-    println!("{:#?}", value);
+    println!("{value:#?}");
 
-    assert!(false)
+    panic!("unexpected result")
 }
 
 #[test]
 fn division_object_step_1() {
     let msg = format_message(
-        Event::new("payload", "", serde_json::json!({})),
+        &Event::new("payload", "", serde_json::json!({})),
         Context::new(
             HashMap::new(),
             HashMap::new(),
@@ -1292,27 +1320,27 @@ fn division_object_step_1() {
         "CSML/basic_test/numerical_operation/division.csml",
     );
 
-    let value: Value = message_to_json_value(msg.to_owned());
+    let value: Value = message_to_json_value(msg.clone());
 
     if let Some(value) = value.get("messages") {
         if let Some(value) = value.get(0) {
             if let Some(value) = value.get("content_type") {
                 if value == "error" {
-                    return assert!(true);
+                    return;
                 }
             }
         }
     }
 
-    println!("{:#?}", value);
+    println!("{value:#?}");
 
-    assert!(false)
+    panic!("unexpected result")
 }
 
 #[test]
 fn division_object_step_2() {
     let msg = format_message(
-        Event::new("payload", "", serde_json::json!({})),
+        &Event::new("payload", "", serde_json::json!({})),
         Context::new(
             HashMap::new(),
             HashMap::new(),
@@ -1325,27 +1353,27 @@ fn division_object_step_2() {
         "CSML/basic_test/numerical_operation/division.csml",
     );
 
-    let value: Value = message_to_json_value(msg.to_owned());
+    let value: Value = message_to_json_value(msg.clone());
 
     if let Some(value) = value.get("messages") {
         if let Some(value) = value.get(0) {
             if let Some(value) = value.get("content_type") {
                 if value == "error" {
-                    return assert!(true);
+                    return;
                 }
             }
         }
     }
 
-    println!("{:#?}", value);
+    println!("{value:#?}");
 
-    assert!(false)
+    panic!("unexpected result")
 }
 
 #[test]
 fn division_object_step_3() {
     let msg = format_message(
-        Event::new("payload", "", serde_json::json!({})),
+        &Event::new("payload", "", serde_json::json!({})),
         Context::new(
             HashMap::new(),
             HashMap::new(),
@@ -1358,27 +1386,27 @@ fn division_object_step_3() {
         "CSML/basic_test/numerical_operation/division.csml",
     );
 
-    let value: Value = message_to_json_value(msg.to_owned());
+    let value: Value = message_to_json_value(msg.clone());
 
     if let Some(value) = value.get("messages") {
         if let Some(value) = value.get(0) {
             if let Some(value) = value.get("content_type") {
                 if value == "error" {
-                    return assert!(true);
+                    return;
                 }
             }
         }
     }
 
-    println!("{:#?}", value);
+    println!("{value:#?}");
 
-    assert!(false)
+    panic!("unexpected result")
 }
 
 #[test]
 fn division_object_step_4() {
     let msg = format_message(
-        Event::new("payload", "", serde_json::json!({})),
+        &Event::new("payload", "", serde_json::json!({})),
         Context::new(
             HashMap::new(),
             HashMap::new(),
@@ -1391,27 +1419,27 @@ fn division_object_step_4() {
         "CSML/basic_test/numerical_operation/division.csml",
     );
 
-    let value: Value = message_to_json_value(msg.to_owned());
+    let value: Value = message_to_json_value(msg.clone());
 
     if let Some(value) = value.get("messages") {
         if let Some(value) = value.get(0) {
             if let Some(value) = value.get("content_type") {
                 if value == "error" {
-                    return assert!(true);
+                    return;
                 }
             }
         }
     }
 
-    println!("{:#?}", value);
+    println!("{value:#?}");
 
-    assert!(false)
+    panic!("unexpected result")
 }
 
 #[test]
 fn division_object_step_5() {
     let msg = format_message(
-        Event::new("payload", "", serde_json::json!({})),
+        &Event::new("payload", "", serde_json::json!({})),
         Context::new(
             HashMap::new(),
             HashMap::new(),
@@ -1424,27 +1452,27 @@ fn division_object_step_5() {
         "CSML/basic_test/numerical_operation/division.csml",
     );
 
-    let value: Value = message_to_json_value(msg.to_owned());
+    let value: Value = message_to_json_value(msg.clone());
 
     if let Some(value) = value.get("messages") {
         if let Some(value) = value.get(0) {
             if let Some(value) = value.get("content_type") {
                 if value == "error" {
-                    return assert!(true);
+                    return;
                 }
             }
         }
     }
 
-    println!("{:#?}", value);
+    println!("{value:#?}");
 
-    assert!(false)
+    panic!("unexpected result")
 }
 
 #[test]
 fn division_object_step_6() {
     let msg = format_message(
-        Event::new("payload", "", serde_json::json!({})),
+        &Event::new("payload", "", serde_json::json!({})),
         Context::new(
             HashMap::new(),
             HashMap::new(),
@@ -1457,21 +1485,21 @@ fn division_object_step_6() {
         "CSML/basic_test/numerical_operation/division.csml",
     );
 
-    let value: Value = message_to_json_value(msg.to_owned());
+    let value: Value = message_to_json_value(msg.clone());
 
     if let Some(value) = value.get("messages") {
         if let Some(value) = value.get(0) {
             if let Some(value) = value.get("content_type") {
                 if value == "error" {
-                    return assert!(true);
+                    return;
                 }
             }
         }
     }
 
-    println!("{:#?}", value);
+    println!("{value:#?}");
 
-    assert!(false)
+    panic!("unexpected result")
 }
 
 /////////////////////////////////////////////////////////////////////////////////
@@ -1481,7 +1509,7 @@ fn division_object_step_6() {
 #[test]
 fn division_string_step_0() {
     let msg = format_message(
-        Event::new("payload", "", serde_json::json!({})),
+        &Event::new("payload", "", serde_json::json!({})),
         Context::new(
             HashMap::new(),
             HashMap::new(),
@@ -1494,27 +1522,27 @@ fn division_string_step_0() {
         "CSML/basic_test/numerical_operation/division.csml",
     );
 
-    let value: Value = message_to_json_value(msg.to_owned());
+    let value: Value = message_to_json_value(msg.clone());
 
     if let Some(value) = value.get("messages") {
         if let Some(value) = value.get(0) {
             if let Some(value) = value.get("content_type") {
                 if value == "error" {
-                    return assert!(true);
+                    return;
                 }
             }
         }
     }
 
-    println!("{:#?}", value);
+    println!("{value:#?}");
 
-    assert!(false)
+    panic!("unexpected result")
 }
 
 #[test]
 fn division_string_step_1() {
     let msg = format_message(
-        Event::new("payload", "", serde_json::json!({})),
+        &Event::new("payload", "", serde_json::json!({})),
         Context::new(
             HashMap::new(),
             HashMap::new(),
@@ -1527,21 +1555,21 @@ fn division_string_step_1() {
         "CSML/basic_test/numerical_operation/division.csml",
     );
 
-    let value: Value = message_to_json_value(msg.to_owned());
+    let value: Value = message_to_json_value(msg.clone());
 
     if let Some(value) = value.get("messages") {
         if let Some(value) = value.get(0) {
             if let Some(value) = value.get("content_type") {
                 if value == "error" {
-                    return assert!(true);
+                    return;
                 }
             }
         }
     }
 
-    println!("{:#?}", value);
+    println!("{value:#?}");
 
-    assert!(false)
+    panic!("unexpected result")
 }
 
 #[test]
@@ -1553,7 +1581,7 @@ fn division_string_step_2() {
             {"content":{"text": "1"}, "content_type":"text"}
         ]}"#;
     let msg = format_message(
-        Event::new("payload", "", serde_json::json!({})),
+        &Event::new("payload", "", serde_json::json!({})),
         Context::new(
             HashMap::new(),
             HashMap::new(),
@@ -1569,7 +1597,7 @@ fn division_string_step_2() {
     let v1: Value = message_to_json_value(msg);
     let v2: Value = serde_json::from_str(data).unwrap();
 
-    assert_eq!(v1, v2)
+    assert_eq!(v1, v2);
 }
 
 #[test]
@@ -1581,7 +1609,7 @@ fn division_string_step_3() {
             {"content":{"text": "1"}, "content_type":"text"}
         ]}"#;
     let msg = format_message(
-        Event::new("payload", "", serde_json::json!({})),
+        &Event::new("payload", "", serde_json::json!({})),
         Context::new(
             HashMap::new(),
             HashMap::new(),
@@ -1597,13 +1625,13 @@ fn division_string_step_3() {
     let v1: Value = message_to_json_value(msg);
     let v2: Value = serde_json::from_str(data).unwrap();
 
-    assert_eq!(v1, v2)
+    assert_eq!(v1, v2);
 }
 
 #[test]
 fn division_string_step_4() {
     let msg = format_message(
-        Event::new("payload", "", serde_json::json!({})),
+        &Event::new("payload", "", serde_json::json!({})),
         Context::new(
             HashMap::new(),
             HashMap::new(),
@@ -1616,27 +1644,27 @@ fn division_string_step_4() {
         "CSML/basic_test/numerical_operation/division.csml",
     );
 
-    let value: Value = message_to_json_value(msg.to_owned());
+    let value: Value = message_to_json_value(msg.clone());
 
     if let Some(value) = value.get("messages") {
         if let Some(value) = value.get(0) {
             if let Some(value) = value.get("content_type") {
                 if value == "error" {
-                    return assert!(true);
+                    return;
                 }
             }
         }
     }
 
-    println!("{:#?}", value);
+    println!("{value:#?}");
 
-    assert!(false)
+    panic!("unexpected result")
 }
 
 #[test]
 fn division_string_step_5() {
     let msg = format_message(
-        Event::new("payload", "", serde_json::json!({})),
+        &Event::new("payload", "", serde_json::json!({})),
         Context::new(
             HashMap::new(),
             HashMap::new(),
@@ -1649,21 +1677,21 @@ fn division_string_step_5() {
         "CSML/basic_test/numerical_operation/division.csml",
     );
 
-    let value: Value = message_to_json_value(msg.to_owned());
+    let value: Value = message_to_json_value(msg.clone());
 
     if let Some(value) = value.get("messages") {
         if let Some(value) = value.get(0) {
             if let Some(value) = value.get("content_type") {
                 if value == "error" {
-                    return assert!(true);
+                    return;
                 }
             }
         }
     }
 
-    println!("{:#?}", value);
+    println!("{value:#?}");
 
-    assert!(false)
+    panic!("unexpected result")
 }
 
 #[test]
@@ -1675,7 +1703,7 @@ fn division_string_step_6() {
             {"content":{"text": "1"}, "content_type":"text"}
         ]}"#;
     let msg = format_message(
-        Event::new("payload", "", serde_json::json!({})),
+        &Event::new("payload", "", serde_json::json!({})),
         Context::new(
             HashMap::new(),
             HashMap::new(),
@@ -1691,5 +1719,5 @@ fn division_string_step_6() {
     let v1: Value = message_to_json_value(msg);
     let v2: Value = serde_json::from_str(data).unwrap();
 
-    assert_eq!(v1, v2)
+    assert_eq!(v1, v2);
 }

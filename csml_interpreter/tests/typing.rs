@@ -13,7 +13,7 @@ use serde_json::Value;
 fn typing_0() {
     // let data = r#"{"messages":[ {"content":{"error": "Builtin Typing expect one argument of type int or float | example: Typing(3, ..) at line 5, column 6 in step [typing_0] from flow [flow]"},"content_type":"error"} ],"memories":[]}"#;
     let msg = format_message(
-        Event::new("payload", "", serde_json::json!({})),
+        &Event::new("payload", "", serde_json::json!({})),
         Context::new(
             HashMap::new(),
             HashMap::new(),
@@ -26,11 +26,7 @@ fn typing_0() {
         "CSML/basic_test/built-in/typing.csml",
     );
 
-    if msg.messages[0].content_type == "error" {
-        return assert!(true);
-    }
-
-    assert!(false);
+    assert_eq!(msg.messages[0].content_type, "error");
 }
 
 #[test]
@@ -38,7 +34,7 @@ fn typing_1() {
     let data =
         r#"{"messages":[ {"content":{"duration": 10},"content_type":"typing"} ],"memories":[]}"#;
     let msg = format_message(
-        Event::new("payload", "", serde_json::json!({})),
+        &Event::new("payload", "", serde_json::json!({})),
         Context::new(
             HashMap::new(),
             HashMap::new(),
@@ -54,5 +50,5 @@ fn typing_1() {
     let v1: Value = message_to_json_value(msg);
     let v2: Value = serde_json::from_str(data).unwrap();
 
-    assert_eq!(v1, v2)
+    assert_eq!(v1, v2);
 }

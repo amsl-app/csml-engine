@@ -1,14 +1,14 @@
 use crate::data::{
-    ast::*,
-    data::{init_child_context, init_child_scope, Data},
+    ArgsType, Literal, MSG, MemoryType, MessageData, Position,
+    ast::{Expr, Flow, FromFlow, ImportScope, InstructionScope, Interval},
+    core::{Data, init_child_context, init_child_scope},
     error_info::ErrorInfo,
     literal::create_error_info,
     primitive::PrimitiveClosure,
-    tokens::*,
+    tokens::{BUILT_IN, BUILT_IN_WITHOUT_WARNINGS},
     warnings::DisplayWarnings,
-    ArgsType, Literal, MemoryType, MessageData, Position, MSG,
 };
-use crate::error_format::*;
+use crate::error_format::{ERROR_BUILTIN_UNKNOWN, ERROR_FN_ARGS, gen_error_info};
 use crate::interpreter::{
     builtins::{match_builtin, match_native_builtin},
     function_scope::exec_fn_in_new_scope,
@@ -42,7 +42,7 @@ fn check_for_function(name: &str, data: &Data) -> Option<(InstructionScope, Expr
             name: name.to_owned(),
             args: Vec::new(),
         })
-        .map(|(i, e)| (i.to_owned(), e.to_owned()))
+        .map(|(i, e)| (i.clone(), e.clone()))
 }
 
 fn get_type<'a>(name: &'a str, interval: Interval, data: &'a Data) -> ObjType {
@@ -83,7 +83,7 @@ fn get_type<'a>(name: &'a str, interval: Interval, data: &'a Data) -> ObjType {
 fn get_function<'a>(
     flow: &'a Flow,
     fn_name: &str,
-    original_name: &Option<String>,
+    original_name: Option<&str>,
 ) -> Option<(Vec<String>, Expr, &'a Flow)> {
     let name = match original_name {
         Some(original_name) => original_name.to_owned(),
@@ -97,7 +97,7 @@ fn get_function<'a>(
             args: Vec::new(),
         })?
     {
-        return Some((args.to_owned(), expr.to_owned(), flow));
+        return Some((args.clone(), expr.clone(), flow));
     }
     None
 }
@@ -108,77 +108,40 @@ fn search_function<'a>(
     extern_flows: &'a HashMap<String, Flow>,
     import: &ImportScope,
 ) -> Result<(Vec<String>, Expr, &'a Flow), ErrorInfo> {
+    let build_error_info = |flow_name: &String| {
+        let error_message = format!(
+            "function '{}' not found in '{}' flow",
+            import.name, flow_name
+        );
+        let error_info = create_error_info(&error_message, Interval::default());
+        ErrorInfo {
+            position: Position::new(import.interval, origin_flow_name),
+            message: error_message,
+            additional_info: Some(Box::new(error_info)),
+        }
+    };
+
+    let get_function_from_flows = |flows: &'a HashMap<String, Flow>, flow_name| {
+        if let Some(flow) = flows.get(flow_name) {
+            get_function(flow, &import.name, import.original_name.as_deref())
+                .ok_or_else(|| build_error_info(flow_name))
+        } else {
+            Err(build_error_info(flow_name))
+        }
+    };
+
     match &import.from_flow {
-        FromFlow::Normal(flow_name) => match bot_flows.get(flow_name) {
-            Some(flow) => {
-                let error_message = format!(
-                    "function '{}' not found in '{}' flow",
-                    import.name, flow_name
-                );
-                let error_info = create_error_info(&error_message, Interval::default());
-
-                get_function(flow, &import.name, &import.original_name).ok_or(ErrorInfo {
-                    position: Position::new(import.interval, origin_flow_name),
-                    message: error_message,
-                    additional_info: Some(error_info),
-                })
-            }
-            None => {
-                let error_message = format!(
-                    "function '{}' not found in '{}' flow",
-                    import.name, flow_name
-                );
-                let error_info = create_error_info(&error_message, Interval::default());
-
-                Err(ErrorInfo {
-                    position: Position::new(import.interval, origin_flow_name),
-                    message: error_message,
-                    additional_info: Some(error_info),
-                })
-            }
-        },
-        FromFlow::Extern(flow_name) => match extern_flows.get(flow_name) {
-            Some(flow) => {
-                let error_message = format!(
-                    "function '{}' not found in '{}' flow",
-                    import.name, flow_name
-                );
-                let error_info = create_error_info(&error_message, Interval::default());
-
-                get_function(flow, &import.name, &import.original_name).ok_or(ErrorInfo {
-                    position: Position::new(import.interval, origin_flow_name),
-                    message: error_message,
-                    additional_info: Some(error_info),
-                })
-            }
-            None => {
-                let error_message = format!(
-                    "function '{}' not found in '{}' flow",
-                    import.name, flow_name
-                );
-                let error_info = create_error_info(&error_message, Interval::default());
-
-                Err(ErrorInfo {
-                    position: Position::new(import.interval, origin_flow_name),
-                    message: error_message,
-                    additional_info: Some(error_info),
-                })
-            }
-        },
+        FromFlow::Normal(flow_name) => get_function_from_flows(bot_flows, flow_name),
+        FromFlow::Extern(flow_name) => get_function_from_flows(extern_flows, flow_name),
         FromFlow::None => {
-            for (_name, flow) in bot_flows.iter() {
-                if let Some(values) = get_function(flow, &import.name, &import.original_name) {
+            for flow in bot_flows.values() {
+                if let Some(values) =
+                    get_function(flow, &import.name, import.original_name.as_deref())
+                {
                     return Ok(values);
                 }
             }
-            let error_message = format!("function '{}' not found in bot", import.name);
-            let error_info = create_error_info(&error_message, Interval::default());
-
-            Err(ErrorInfo {
-                position: Position::new(import.interval, origin_flow_name),
-                message: error_message,
-                additional_info: Some(error_info),
-            })
+            Err(build_error_info(&import.name))
         }
     }
 }
@@ -210,14 +173,14 @@ fn check_for_import<'a>(
 fn check_for_closure(name: &str, interval: Interval, data: &Data) -> Option<(Vec<String>, Expr)> {
     match data.step_vars.get(name) {
         Some(lit) => {
-            let val = Literal::get_value::<PrimitiveClosure>(
+            let val = Literal::get_value::<PrimitiveClosure, _>(
                 &lit.primitive,
                 &data.context.flow,
                 interval,
-                "expect Literal of type [Closure]".to_owned(),
+                "expect Literal of type [Closure]",
             )
             .ok()?
-            .to_owned();
+            .clone();
             Some((val.args, *val.func))
         }
         None => None,
@@ -233,14 +196,14 @@ pub fn insert_args_in_scope_memory(
     fn_args: &[String],
     args: &ArgsType,
     msg_data: &mut MessageData,
-    sender: &Option<mpsc::Sender<MSG>>,
+    sender: Option<&mpsc::Sender<MSG>>,
 ) {
     for (index, name) in fn_args.iter().enumerate() {
         let value = args.get(name, index).unwrap();
 
         save_literal_in_mem(
-            value.to_owned(),
-            name.to_owned(),
+            value.clone(),
+            name.clone(),
             &MemoryType::Use,
             true,
             new_scope_data,
@@ -250,16 +213,16 @@ pub fn insert_args_in_scope_memory(
     }
 }
 
-pub fn insert_memories_in_scope_memory(
+pub fn insert_memories_in_scope_memory<S: std::hash::BuildHasher>(
     new_scope_data: &mut Data,
-    memories: HashMap<String, Literal>,
+    memories: &HashMap<String, Literal, S>,
     msg_data: &mut MessageData,
-    sender: &Option<mpsc::Sender<MSG>>,
+    sender: Option<&mpsc::Sender<MSG>>,
 ) {
-    for (name, value) in memories.iter() {
+    for (name, value) in memories {
         save_literal_in_mem(
-            value.to_owned(),
-            name.to_owned(),
+            value.clone(),
+            name.clone(),
             &MemoryType::Use,
             true,
             new_scope_data,
@@ -275,57 +238,39 @@ pub fn resolve_object(
     interval: Interval,
     data: &mut Data,
     msg_data: &mut MessageData,
-    sender: &Option<mpsc::Sender<MSG>>,
+    sender: Option<&mpsc::Sender<MSG>>,
 ) -> Result<Literal, ErrorInfo> {
     match get_type(name, interval, data) {
         ObjType::NativeComponent => {
-            let resolved_args =
-                resolve_fn_args(args, data, msg_data, &DisplayWarnings::On, sender)?;
+            let resolved_args = resolve_fn_args(args, data, msg_data, DisplayWarnings::On, sender)?;
 
-            let value = match_native_builtin(name, resolved_args, interval.to_owned(), data);
+            let value = match_native_builtin(name, &resolved_args, interval, data);
             Ok(MSG::send_error_msg(sender, msg_data, value))
         }
 
         ObjType::BuiltIn => {
-            let resolved_args =
-                resolve_fn_args(args, data, msg_data, &DisplayWarnings::On, sender)?;
+            let resolved_args = resolve_fn_args(args, data, msg_data, DisplayWarnings::On, sender)?;
 
-            let value = match_builtin(
-                name,
-                resolved_args,
-                interval.to_owned(),
-                data,
-                msg_data,
-                sender,
-            );
+            let value = match_builtin(name, resolved_args, interval, data, msg_data, sender);
 
             Ok(MSG::send_error_msg(sender, msg_data, value))
         }
 
         ObjType::BuiltInWithoutWarnings => {
             let resolved_args =
-                resolve_fn_args(args, data, msg_data, &DisplayWarnings::Off, sender)?;
+                resolve_fn_args(args, data, msg_data, DisplayWarnings::Off, sender)?;
 
-            let value = match_builtin(
-                name,
-                resolved_args,
-                interval.to_owned(),
-                data,
-                msg_data,
-                sender,
-            );
+            let value = match_builtin(name, resolved_args, interval, data, msg_data, sender);
 
             Ok(MSG::send_error_msg(sender, msg_data, value))
         }
 
-        ObjType::Function { fn_args, scope } => {
-            let resolved_args =
-                resolve_fn_args(args, data, msg_data, &DisplayWarnings::On, sender)?;
+        ObjType::Function { fn_args, scope } | ObjType::Closure { fn_args, scope } => {
+            let resolved_args = resolve_fn_args(args, data, msg_data, DisplayWarnings::On, sender)?;
             exec_fn(
                 &scope,
                 &fn_args,
-                resolved_args,
-                None,
+                &resolved_args,
                 interval,
                 data,
                 msg_data,
@@ -334,8 +279,7 @@ pub fn resolve_object(
         }
 
         ObjType::Import => {
-            let resolved_args =
-                resolve_fn_args(args, data, msg_data, &DisplayWarnings::On, sender)?;
+            let resolved_args = resolve_fn_args(args, data, msg_data, DisplayWarnings::On, sender)?;
 
             let error = gen_error_info(
                 Position::new(interval, &data.context.flow),
@@ -365,46 +309,26 @@ pub fn resolve_object(
             exec_fn_in_new_scope(&expr, &mut new_scope_data, msg_data, sender)
         }
 
-        ObjType::Closure { fn_args, scope } => {
-            let resolved_args =
-                resolve_fn_args(args, data, msg_data, &DisplayWarnings::On, sender)?;
-
-            exec_fn(
-                &scope,
-                &fn_args,
-                resolved_args,
-                None,
-                interval,
-                data,
-                msg_data,
-                sender,
-            )
-        }
-
         ObjType::Error => {
             let err = gen_error_info(
                 Position::new(interval, &data.context.flow),
-                format!("{} [{}]", ERROR_BUILTIN_UNKNOWN, name),
+                format!("{ERROR_BUILTIN_UNKNOWN} [{name}]"),
             );
 
-            Ok(MSG::send_error_msg(
-                sender,
-                msg_data,
-                Err(err) as Result<Literal, ErrorInfo>,
-            ))
+            Ok(MSG::send_error_msg(sender, msg_data, Err(err)))
         }
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 pub fn exec_fn(
     scope: &Expr,
     fn_args: &[String],
-    args: ArgsType,
-    memories_to_insert: Option<HashMap<String, Literal>>,
+    args: &ArgsType,
     interval: Interval,
     data: &mut Data,
     msg_data: &mut MessageData,
-    sender: &Option<mpsc::Sender<MSG>>,
+    sender: Option<&mpsc::Sender<MSG>>,
 ) -> Result<Literal, ErrorInfo> {
     if fn_args.len() > args.len() {
         return Err(gen_error_info(
@@ -416,10 +340,7 @@ pub fn exec_fn(
     let mut context = init_child_context(data);
     let mut step_count = *data.step_count;
     let mut new_scope_data = init_child_scope(data, &mut context, &mut step_count);
-    insert_args_in_scope_memory(&mut new_scope_data, fn_args, &args, msg_data, sender);
-    if let Some(memories) = memories_to_insert {
-        insert_memories_in_scope_memory(&mut new_scope_data, memories, msg_data, sender);
-    }
+    insert_args_in_scope_memory(&mut new_scope_data, fn_args, args, msg_data, sender);
 
     exec_fn_in_new_scope(scope, &mut new_scope_data, msg_data, sender)
 }
@@ -427,11 +348,11 @@ pub fn exec_fn(
 pub fn exec_closure(
     scope: &Expr,
     fn_args: &[String],
-    args: ArgsType,
+    args: &ArgsType,
     interval: Interval,
     data: &mut Data,
     msg_data: &mut MessageData,
-    sender: &Option<mpsc::Sender<MSG>>,
+    sender: Option<&mpsc::Sender<MSG>>,
 ) -> Result<Literal, ErrorInfo> {
     if fn_args.len() > args.len() {
         return Err(gen_error_info(

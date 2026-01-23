@@ -14,10 +14,7 @@ fn format_message(filepath: String) -> Result<Flow, ErrorInfo> {
 
 #[test]
 fn functions_syntax() {
-    let result = match format_message("CSML/basic_test/syntax/functions.csml".to_owned()) {
-        Ok(_) => true,
-        Err(_) => false,
-    };
+    let result = format_message("CSML/basic_test/syntax/functions.csml".to_owned()).is_ok();
 
     assert!(result);
 }

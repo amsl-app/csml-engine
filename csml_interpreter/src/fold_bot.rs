@@ -1,10 +1,10 @@
-use crate::data::{ast::FromFlow, warnings::*};
+use crate::data::{ast::FromFlow, warnings::Warnings};
 use crate::error_format::ErrorInfo;
 
 use crate::linter::{
-    linter::{validate_flow_ast, validate_functions, validate_gotos, validate_imports},
     FlowToValidate, FunctionCallInfo, FunctionInfo, ImportInfo, LinterInfo, ScopeType,
     StepBreakers, StepInfo,
+    core::{validate_flow_ast, validate_functions, validate_gotos, validate_imports},
 };
 
 use std::collections::{HashMap, HashSet};
@@ -13,12 +13,12 @@ use std::collections::{HashMap, HashSet};
 // PUBLIC FUNCTIONS
 ////////////////////////////////////////////////////////////////////////////////
 
-pub fn fold_bot(
+pub(crate) fn fold_bot(
     flows: &[FlowToValidate],
     modules: &[FlowToValidate],
     errors: &mut Vec<ErrorInfo>,
     warnings: &mut Vec<Warnings>,
-    native_components: &Option<serde_json::Map<String, serde_json::Value>>,
+    native_components: Option<&serde_json::Map<String, serde_json::Value>>,
     default_flow: &str,
 ) -> String {
     let scope_type = ScopeType::Step("start".to_owned());
@@ -49,14 +49,14 @@ pub fn fold_bot(
         native_components,
     );
 
-    for flow in flows.iter() {
+    for flow in flows {
         linter_info.flow_name = &flow.flow_name;
         linter_info.raw_flow = flow.raw_flow;
 
         validate_flow_ast(flow, &mut linter_info, false);
     }
 
-    for flow in modules.iter() {
+    for flow in modules {
         linter_info.flow_name = &flow.flow_name;
         linter_info.raw_flow = flow.raw_flow;
 
@@ -68,7 +68,7 @@ pub fn fold_bot(
     validate_functions(&mut linter_info);
 
     let flow_list = make_flow_list(linter_info.step_list);
-    make_fold(default_flow, flow_list, &linter_info)
+    make_fold(default_flow, &flow_list, &linter_info)
 }
 
 ////////////////////////////////////////////////////////////////////////////////
@@ -81,9 +81,9 @@ fn make_flow_list<'a>(step_list: &HashSet<StepInfo<'a>>) -> HashMap<String, Vec<
         |mut acc: HashMap<String, Vec<StepInfo<'a>>>, goto_info| {
             if let Some(flow_gotos) = acc.get_mut(&goto_info.in_flow) {
                 // goto_info
-                flow_gotos.push(goto_info.to_owned());
+                flow_gotos.push(goto_info.clone());
             } else {
-                acc.insert(goto_info.in_flow.clone(), vec![goto_info.to_owned()]);
+                acc.insert(goto_info.in_flow.clone(), vec![goto_info.clone()]);
             }
 
             acc
@@ -93,11 +93,11 @@ fn make_flow_list<'a>(step_list: &HashSet<StepInfo<'a>>) -> HashMap<String, Vec<
 
 fn update_step_names(
     default_flow: &str,
-    flow: &mut Vec<String>,
+    flow: &mut [String],
     current_flow_name: &str,
     step_list: &HashSet<StepInfo<'_>>,
 ) {
-    for step in step_list.iter() {
+    for step in step_list {
         if step.flow != current_flow_name
             || (step.step == "start" && default_flow == current_flow_name)
         {
@@ -109,7 +109,7 @@ fn update_step_names(
 
         let (first, second) = flow[line].split_at(column);
 
-        let mut split_line: Vec<String> = second.split(':').map(|s| s.to_string()).collect();
+        let mut split_line: Vec<String> = second.split(':').map(ToString::to_string).collect();
         split_line[0] = format!("{}{}_{}:", first, step.in_flow, step.step);
 
         flow[line] = split_line.concat();
@@ -117,23 +117,23 @@ fn update_step_names(
 }
 
 fn make_update_fn_name_list<'a>(
-    flow: &mut Vec<String>,
+    flow: &mut [String],
     flow_name: &str,
-    flow_imports: &Vec<&ImportInfo<'a>>,
+    flow_imports: &[&ImportInfo<'a>],
     function_list: &HashSet<FunctionInfo<'a>>,
-    functions_call_list: &Vec<FunctionCallInfo<'a>>,
+    functions_call_list: &[FunctionCallInfo<'a>],
 ) {
-    for function in function_list.iter() {
+    for function in function_list {
         if function.in_flow == flow_name {
-            update_fn_name(flow, function)
+            update_fn_name(flow, function);
         }
     }
 
-    for function_call in functions_call_list.iter() {
+    for function_call in functions_call_list {
         if function_call.in_flow == flow_name {
             let import = flow_imports
                 .iter()
-                .find(|&&import| &import.as_name == &function_call.name);
+                .find(|&&import| import.as_name == function_call.name);
 
             if let Some(&import) = import {
                 let fn_name = match &import.original_name {
@@ -141,7 +141,7 @@ fn make_update_fn_name_list<'a>(
                     None => &import.as_name,
                 };
 
-                for function in function_list.iter() {
+                for function in function_list {
                     match &import.from_flow {
                         FromFlow::Normal(from) if function.in_flow == from => {
                             update_fn_call_name(flow, function, function_call);
@@ -162,7 +162,7 @@ fn make_update_fn_name_list<'a>(
 }
 
 fn update_fn_call_name(
-    flow: &mut Vec<String>,
+    flow: &mut [String],
     function: &FunctionInfo,
     function_call: &FunctionCallInfo,
 ) {
@@ -171,27 +171,27 @@ fn update_fn_call_name(
 
     let (first, second) = flow[line].split_at(column);
 
-    let mut split_line: Vec<String> = second.split('(').map(|s| s.to_string()).collect();
+    let mut split_line: Vec<String> = second.split('(').map(ToString::to_string).collect();
 
     split_line[0] = format!("{} {}_{}(", first, function.in_flow, function.name);
 
     flow[line] = split_line.concat();
 }
 
-fn update_fn_name(flow: &mut Vec<String>, function: &FunctionInfo) {
+fn update_fn_name(flow: &mut [String], function: &FunctionInfo) {
     let line = (function.interval.start_line - 1) as usize;
 
-    let mut split_line: Vec<String> = flow[line].split('(').map(|s| s.to_string()).collect();
+    let mut split_line: Vec<String> = flow[line].split('(').map(ToString::to_string).collect();
 
     split_line[0] = format!("fn {}_{}(", function.in_flow, function.name);
 
     flow[line] = split_line.concat();
 }
 
-fn update_goto_names(flow: &mut Vec<String>, default_flow: &str, flow_gotos: &[StepInfo]) {
-    for step_info in flow_gotos.iter() {
-        for goto_info in step_info.step_breakers.iter() {
-            if let StepBreakers::GOTO {
+fn update_goto_names(flow: &mut [String], default_flow: &str, flow_gotos: &[StepInfo]) {
+    for step_info in flow_gotos {
+        for goto_info in &step_info.step_breakers {
+            if let StepBreakers::Goto {
                 step: step_name,
                 flow: flow_name,
                 interval,
@@ -202,15 +202,15 @@ fn update_goto_names(flow: &mut Vec<String>, default_flow: &str, flow_gotos: &[S
 
                 let (first, second) = flow[line].split_at(column);
                 let mut split_line: Vec<String> =
-                    second.split(' ').map(|s| s.to_string()).collect();
+                    second.split(' ').map(ToString::to_string).collect();
 
                 let new_goto_name = match step_name {
                     step if step == "end" => "end".to_string(),
                     step if step == "start" && flow_name == default_flow => "start".to_string(),
-                    step => format!("{}_{} ", flow_name, step),
+                    step => format!("{flow_name}_{step} "),
                 };
 
-                split_line[0] = format!("{}{}", first, new_goto_name,);
+                split_line[0] = format!("{first}{new_goto_name}",);
 
                 flow[line] = split_line.concat();
             }
@@ -220,18 +220,18 @@ fn update_goto_names(flow: &mut Vec<String>, default_flow: &str, flow_gotos: &[S
 
 fn make_fold(
     default_flow: &str,
-    flow_list: HashMap<String, Vec<StepInfo<'_>>>,
+    flow_list: &HashMap<String, Vec<StepInfo<'_>>>,
     linter_info: &LinterInfo,
 ) -> String {
     let mut main_flow: Vec<String> = Vec::new();
 
-    for (flow_name, flow_steps) in flow_list.iter() {
-        let flow = match flow_steps.get(0) {
+    for (flow_name, flow_steps) in flow_list {
+        let flow = match flow_steps.first() {
             Some(step_info) => step_info.raw_flow,
             None => continue,
         };
 
-        let mut split_flow: Vec<String> = flow.split('\n').map(|s| s.to_string()).collect();
+        let mut split_flow: Vec<String> = flow.split('\n').map(ToString::to_string).collect();
 
         update_goto_names(&mut split_flow, default_flow, flow_steps);
 
@@ -240,7 +240,7 @@ fn make_fold(
             .iter()
             .fold(Vec::new(), |mut acc, import| {
                 if import.in_flow == flow_name {
-                    acc.push(import)
+                    acc.push(import);
                 }
                 acc
             });
@@ -268,16 +268,12 @@ fn make_fold(
     main_flow.join("\n")
 }
 
-fn remove_imports(flow: &mut Vec<String>, flow_imports: &Vec<&ImportInfo<'_>>) {
+fn remove_imports(flow: &mut Vec<String>, flow_imports: &[&ImportInfo<'_>]) {
     let mut index_corrector = 1;
-    for import in flow_imports.iter() {
-        let mut line = import.interval.start_line as i32 - index_corrector;
+    for import in flow_imports {
+        let line = (import.interval.start_line as usize).saturating_sub(index_corrector);
 
-        if line < 0 {
-            line = 0;
-        }
-
-        flow.remove(line as usize);
+        flow.remove(line);
 
         index_corrector += 1;
     }

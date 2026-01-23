@@ -3,19 +3,24 @@ pub mod models;
 pub mod filter;
 #[cfg(feature = "async")]
 pub mod future;
-pub mod sync;
 
 use crate::{
+    Client,
     encrypt::{decrypt_data, encrypt_data},
-    Client, Context,
 };
-use csml_interpreter::data::{CsmlBot, CsmlFlow, Message, Module};
-#[cfg(feature = "pooled")]
-use diesel::r2d2::{ConnectionManager, PooledConnection, R2D2Connection};
+use csml_interpreter::data::{Context, CsmlBot, CsmlFlow, Message, Module};
+
+#[cfg(feature = "sea-orm")]
+use sea_orm::{ConnectionTrait, TransactionTrait};
 #[cfg(any(feature = "postgresql", feature = "sqlite"))]
 use serde::de::StdError;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use std::error::Error;
+use std::fmt::{Display, Formatter};
+
+use std::marker::PhantomData;
+
 use uuid::Uuid;
 
 pub const DEBUG: &str = "DEBUG";
@@ -36,217 +41,79 @@ pub struct SerializeCsmlBot {
     pub modules: Option<Vec<Module>>,
 }
 
-/**
- * Before CSML v1.5, the Bot struct was encoded with bincode. This does not
- * allow to easily change the contents of a bot, and would not allow to add
- * the bot env feature.
- * We need to keep this for backwards compatibility until CSML v2.
- * TO BE REMOVED in CSML v2
- */
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct CsmlBotBincode {
-    pub id: String,
-    pub name: String,
-    pub flows: Vec<CsmlFlow>,
-    pub native_components: Option<String>,
-    // serde_json::Map<String, serde_json::Value>
-    pub custom_components: Option<String>,
-    // serde_json::Value
-    pub default_flow: String,
-}
-
-impl CsmlBotBincode {
-    pub fn to_bot(self) -> SerializeCsmlBot {
-        SerializeCsmlBot {
-            id: self.id,
-            name: self.name,
-            flows: self.flows,
-            native_components: self.native_components,
-            custom_components: self.custom_components,
-            default_flow: self.default_flow,
-            no_interruption_delay: None,
-            env: None,
-            modules: None,
-        }
-    }
-}
-
+#[must_use]
 pub fn to_serializable_bot(bot: &CsmlBot) -> SerializeCsmlBot {
     SerializeCsmlBot {
-        id: bot.id.to_owned(),
-        name: bot.name.to_owned(),
-        flows: bot.flows.to_owned(),
+        id: bot.id.clone(),
+        name: bot.name.clone(),
+        flows: bot.flows.clone(),
         native_components: {
             bot.native_components
-                .to_owned()
-                .map(|value| serde_json::Value::Object(value).to_string())
+                .clone()
+                .map(|value| Value::Object(value).to_string())
         },
-        custom_components: {
-            bot.custom_components
-                .to_owned()
-                .map(|value| value.to_string())
-        },
-        default_flow: bot.default_flow.to_owned(),
+        custom_components: { bot.custom_components.clone().map(|value| value.to_string()) },
+        default_flow: bot.default_flow.clone(),
         no_interruption_delay: bot.no_interruption_delay,
         env: match &bot.env {
             Some(value) => encrypt_data(value).ok(),
             None => None,
         },
-        modules: bot.modules.to_owned(),
+        modules: bot.modules.clone(),
     }
 }
 
 impl SerializeCsmlBot {
+    #[must_use]
     pub fn to_bot(&self) -> CsmlBot {
         CsmlBot {
-            id: self.id.to_owned(),
-            name: self.name.to_owned(),
+            id: self.id.clone(),
+            name: self.name.clone(),
             apps_endpoint: None,
-            flows: self.flows.to_owned(),
-            native_components: {
-                match self.native_components.to_owned() {
-                    Some(value) => match serde_json::from_str(&value) {
-                        Ok(serde_json::Value::Object(map)) => Some(map),
-                        _ => unreachable!(),
-                    },
-                    None => None,
+            flows: self.flows.clone(),
+            native_components: self.native_components.as_ref().map(|value| {
+                match serde_json::from_str(value.as_str()) {
+                    Ok(Value::Object(map)) => map,
+                    _ => unreachable!(),
                 }
-            },
-            custom_components: {
-                match self.custom_components.to_owned() {
-                    Some(value) => match serde_json::from_str(&value) {
-                        Ok(value) => Some(value),
-                        Err(_e) => unreachable!(),
-                    },
-                    None => None,
+            }),
+            custom_components: self.custom_components.as_ref().map(|value| {
+                match serde_json::from_str(value.as_str()) {
+                    Ok(value) => value,
+                    _ => unreachable!(),
                 }
-            },
-            default_flow: self.default_flow.to_owned(),
+            }),
+            default_flow: self.default_flow.clone(),
             bot_ast: None,
             no_interruption_delay: self.no_interruption_delay,
-            env: match self.env.to_owned() {
-                Some(value) => decrypt_data(value).ok(),
-                None => None,
-            },
-            modules: self.modules.to_owned(),
+            env: self.env.as_ref().and_then(|value| decrypt_data(value).ok()),
+            modules: self.modules.clone(),
             multibot: None,
         }
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct DynamoBot {
-    pub id: String,
-    pub name: String,
-    pub custom_components: Option<String>,
-    pub default_flow: String,
-    pub no_interruption_delay: Option<i32>,
-    pub env: Option<String>,
-}
-
-/**
- * Before CSML v1.5, the Bot struct was encoded with bincode. This does not
- * allow to easily change the contents of a bot, and would not allow to add
- * the bot env feature.
- * We need to keep this for backwards compatibility until CSML v2.
- * TO BE REMOVED in CSML v2
- */
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct DynamoBotBincode {
-    pub id: String,
-    pub name: String,
-    pub custom_components: Option<String>,
-    pub default_flow: String,
-}
-
-impl DynamoBotBincode {
-    pub fn to_bot(self) -> DynamoBot {
-        DynamoBot {
-            id: self.id,
-            name: self.name,
-            custom_components: self.custom_components,
-            default_flow: self.default_flow,
-            no_interruption_delay: None,
-            env: None,
-        }
-    }
-}
-
-pub fn to_dynamo_bot(csml_bot: &CsmlBot) -> DynamoBot {
-    DynamoBot {
-        id: csml_bot.id.to_owned(),
-        name: csml_bot.name.to_owned(),
-        custom_components: csml_bot
-            .custom_components
-            .to_owned()
-            .map(|value| value.to_string()),
-        default_flow: csml_bot.default_flow.to_owned(),
-        no_interruption_delay: csml_bot.no_interruption_delay,
-        env: match &csml_bot.env {
-            Some(value) => encrypt_data(value).ok(),
-            None => None,
-        },
-    }
-}
-
-impl DynamoBot {
-    pub fn to_bot(&self, flows: Vec<CsmlFlow>, modules: Vec<Module>) -> CsmlBot {
-        CsmlBot {
-            id: self.id.to_owned(),
-            name: self.name.to_owned(),
-            apps_endpoint: None,
-            flows,
-            native_components: None,
-            custom_components: {
-                match self.custom_components.to_owned() {
-                    Some(value) => match serde_json::from_str(&value) {
-                        Ok(value) => Some(value),
-                        Err(_e) => unreachable!(),
-                    },
-                    None => None,
-                }
-            },
-            default_flow: self.default_flow.to_owned(),
-            bot_ast: None,
-            no_interruption_delay: self.no_interruption_delay,
-            env: match self.env.to_owned() {
-                Some(value) => decrypt_data(value).ok(),
-                None => None,
-            },
-            modules: Some(modules),
-            multibot: None,
-        }
-    }
-}
-
-#[cfg(feature = "pooled")]
-pub enum Connections<'a, E: R2D2Connection + 'static> {
+pub enum MutConnections<'a, E> {
     Direct(E),
     Reference(&'a mut E),
-    Managed(&'a mut PooledConnection<ConnectionManager<E>>),
 }
 
-#[cfg(feature = "pooled")]
-impl<'a, E: R2D2Connection> AsMut<E> for Connections<'a, E> {
+impl<E> AsMut<E> for MutConnections<'_, E> {
     fn as_mut(&mut self) -> &mut E {
         match self {
-            Connections::Direct(e) => e,
-            Connections::Reference(e) => e,
-            #[cfg(feature = "pooled")]
-            Connections::Managed(e) => e,
+            MutConnections::Direct(e) => e,
+            MutConnections::Reference(e) => e,
         }
     }
 }
 
-#[cfg(not(feature = "pooled"))]
 pub enum Connections<'a, E> {
     Direct(E),
-    Reference(&'a mut E),
+    Reference(&'a E),
 }
 
-#[cfg(not(feature = "pooled"))]
-impl<'a, E> AsMut<E> for Connections<'a, E> {
-    fn as_mut(&mut self) -> &mut E {
+impl<T> AsRef<T> for Connections<'_, T> {
+    fn as_ref(&self) -> &T {
         match self {
             Connections::Direct(e) => e,
             Connections::Reference(e) => e,
@@ -255,126 +122,143 @@ impl<'a, E> AsMut<E> for Connections<'a, E> {
 }
 
 pub enum Database<'a> {
-    #[cfg(feature = "mongo")]
-    Mongo(MongoDbClient),
-    #[cfg(feature = "dynamo")]
-    Dynamodb(DynamoDbClient),
     #[cfg(feature = "postgresql")]
     Postgresql(PostgresqlClient<'a>),
     #[cfg(feature = "sqlite")]
     SqLite(SqliteClient<'a>),
-    None(std::marker::PhantomData<&'a ()>),
+    None(PhantomData<&'a ()>),
 }
 
+#[cfg(feature = "postgresql")]
+impl<'a> From<&'a mut diesel::PgConnection> for Database<'a> {
+    fn from(connection: &'a mut diesel::PgConnection) -> Self {
+        Self::Postgresql(PostgresqlClient {
+            client: MutConnections::Reference(connection),
+        })
+    }
+}
+
+#[cfg(feature = "sqlite")]
+impl<'a> From<&'a mut diesel::SqliteConnection> for Database<'a> {
+    fn from(connection: &'a mut diesel::SqliteConnection) -> Self {
+        Self::SqLite(SqliteClient {
+            client: MutConnections::Reference(connection),
+        })
+    }
+}
+
+#[cfg(feature = "sea-orm")]
+pub trait SeaOrmDbTraits: ConnectionTrait + TransactionTrait + Sync {}
+
+#[cfg(feature = "sea-orm")]
+impl<T: ConnectionTrait + TransactionTrait + Sync> SeaOrmDbTraits for T {}
+
+#[cfg(not(feature = "sea-orm"))]
+pub trait SeaOrmDbTraits: Sync + Send {}
+
+#[cfg(not(feature = "sea-orm"))]
+impl SeaOrmDbTraits for () {}
+
+#[cfg(all(feature = "async", feature = "sea-orm"))]
+type SeaOrmDbType = sea_orm::DatabaseConnection;
+
+#[cfg(all(feature = "async", not(feature = "sea-orm")))]
+type SeaOrmDbType = ();
+
 #[cfg(feature = "async")]
-#[non_exhaustive]
-pub enum AsyncDatabase<'a> {
+pub enum AsyncDatabase<'a, T: SeaOrmDbTraits = SeaOrmDbType> {
     #[cfg(feature = "postgresql-async")]
     Postgresql(AsyncPostgresqlClient<'a>),
+    #[cfg(feature = "sea-orm")]
+    SeaOrm(SeaOrmClient<'a, T>),
+    #[cfg(not(feature = "sea-orm"))]
+    _Impossible(std::convert::Infallible, PhantomData<T>),
+}
+
+#[cfg(feature = "sea-orm")]
+impl<'a, T: SeaOrmDbTraits> AsyncDatabase<'a, T> {
+    pub fn sea_orm(connection: &'a T) -> Self {
+        Self::SeaOrm(SeaOrmClient {
+            client: Connections::Reference(connection),
+        })
+    }
 }
 
 #[cfg(feature = "sqlite")]
 pub struct SqliteClient<'a> {
-    pub client: Connections<'a, diesel::prelude::SqliteConnection>,
+    pub client: MutConnections<'a, diesel::prelude::SqliteConnection>,
 }
 
 #[cfg(feature = "sqlite")]
 impl SqliteClient<'static> {
+    #[must_use]
     pub fn new(client: diesel::prelude::SqliteConnection) -> Self {
         Self {
-            client: Connections::Direct(client),
+            client: MutConnections::Direct(client),
         }
     }
 }
 
 #[cfg(feature = "postgresql")]
 pub struct PostgresqlClient<'a> {
-    pub client: Connections<'a, diesel::prelude::PgConnection>,
+    pub client: MutConnections<'a, diesel::prelude::PgConnection>,
 }
 
 #[cfg(feature = "postgresql")]
 impl PostgresqlClient<'static> {
+    #[must_use]
     pub fn new(client: diesel::prelude::PgConnection) -> Self {
+        Self {
+            client: MutConnections::Direct(client),
+        }
+    }
+}
+
+#[cfg(feature = "sea-orm")]
+pub struct SeaOrmClient<'a, T> {
+    pub client: Connections<'a, T>,
+}
+
+#[cfg(feature = "sea-orm")]
+impl<T> SeaOrmClient<'_, T> {
+    #[must_use]
+    pub fn new(client: T) -> Self {
         Self {
             client: Connections::Direct(client),
         }
     }
-}
 
-#[cfg(feature = "mongo")]
-pub struct MongoDbClient {
-    pub client: mongodb::sync::Database,
-}
-
-#[cfg(feature = "mongo")]
-impl MongoDbClient {
-    pub fn new(client: mongodb::sync::Database) -> Self {
-        Self { client }
-    }
-}
-
-/**
- * Dynamodb runs in async by default and returns futures, that need to be awaited on.
- * The proper way to do it is by using tokio's runtime::block_on(). It is however quite costly
- * to setup, so let's just do it once in the base DynamoDbStruct here.
- */
-#[cfg(feature = "dynamo")]
-pub struct DynamoDbClient {
-    pub client: rusoto_dynamodb::DynamoDbClient,
-    pub s3_client: rusoto_s3::S3Client,
-    pub runtime: tokio::runtime::Runtime,
-}
-
-#[cfg(feature = "dynamo")]
-impl DynamoDbClient {
-    pub fn new(dynamo_region: rusoto_core::Region, s3_region: rusoto_core::Region) -> Self {
-        Self {
-            client: rusoto_dynamodb::DynamoDbClient::new(dynamo_region),
-            s3_client: rusoto_s3::S3Client::new(s3_region),
-            runtime: tokio::runtime::Runtime::new().unwrap(),
-        }
+    #[must_use]
+    pub fn db_ref(&self) -> &T {
+        self.client.as_ref()
     }
 }
 
 #[cfg(feature = "postgresql-async")]
 pub struct AsyncPostgresqlClient<'a> {
-    pub client: Connections<'a, diesel_async::pg::AsyncPgConnection>,
+    pub client: MutConnections<'a, diesel_async::pg::AsyncPgConnection>,
 }
 
 #[cfg(feature = "postgresql-async")]
 impl AsyncPostgresqlClient<'static> {
+    #[must_use]
     pub fn new(client: diesel_async::pg::AsyncPgConnection) -> Self {
         Self {
-            client: Connections::Direct(client),
+            client: MutConnections::Direct(client),
         }
     }
 }
 
-pub struct ConversationInfo<'a> {
+pub struct ConversationInfo {
     pub request_id: String,
     pub conversation_id: Uuid,
     pub callback_url: Option<String>,
     pub client: Client,
     pub context: Context,
     pub metadata: Value,
-    pub messages: Vec<Message>,
+    pub payloads: Vec<Message>,
     pub ttl: Option<chrono::Duration>,
     pub low_data: bool,
-    pub db: Database<'a>,
-}
-
-#[cfg(feature = "async")]
-pub struct AsyncConversationInfo<'a> {
-    pub request_id: String,
-    pub conversation_id: Uuid,
-    pub callback_url: Option<String>,
-    pub client: Client,
-    pub context: Context,
-    pub metadata: Value,
-    pub messages: Vec<Message>,
-    pub ttl: Option<chrono::Duration>,
-    pub low_data: bool,
-    pub db: AsyncDatabase<'a>,
 }
 
 #[derive(Debug)]
@@ -398,67 +282,115 @@ pub enum EngineError {
     DateTimeError(String),
     Parring(String),
     Time(std::time::SystemTimeError),
+    Internal(String),
     #[cfg(all(feature = "openssl", not(feature = "rustls")))]
     Openssl(openssl::error::ErrorStack),
     #[cfg(feature = "rustls")]
     Encryption(String),
     Base64(base64::DecodeError),
-    UUID(uuid::Error),
+    Uuid(uuid::Error),
 
-    #[cfg(feature = "mongo")]
-    BsonDecoder(bson::de::Error),
-    #[cfg(feature = "mongo")]
-    BsonEncoder(bson::ser::Error),
-    #[cfg(feature = "mongo")]
-    MongoDB(mongodb::error::Error),
-
-    #[cfg(feature = "dynamo")]
-    Rusoto(String),
-    #[cfg(feature = "dynamo")]
-    SerdeDynamodb(serde_dynamodb::Error),
-    #[cfg(feature = "dynamo")]
-    S3ErrorCode(u16),
-
-    #[cfg(any(feature = "postgresql", feature = "sqlite"))]
+    #[cfg(any(feature = "postgresql", feature = "sqlite", feature = "sea-orm"))]
     SqlErrorCode(String),
     #[cfg(any(feature = "postgresql", feature = "sqlite"))]
     SqlMigrationsError(String),
 }
 
+impl Error for EngineError {}
+
+impl Display for EngineError {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Serde(err) => {
+                write!(f, "Serde error: {err}")
+            }
+            Self::Io(err) => {
+                write!(f, "IO error: {err}")
+            }
+            Self::Utf8(err) => {
+                write!(f, "Utf8 error: {err}")
+            }
+            Self::Manager(err) => {
+                write!(f, "Manager error: {err}")
+            }
+            Self::Format(err) => {
+                write!(f, "Format error: {err}")
+            }
+            Self::Interpreter(err) => {
+                write!(f, "Interpreter error: {err}")
+            }
+            Self::DateTimeError(err) => {
+                write!(f, "DateTime error: {err}")
+            }
+            Self::Parring(err) => {
+                write!(f, "Parring error: {err}")
+            }
+            Self::Time(err) => {
+                write!(f, "Time error: {err}")
+            }
+            Self::Internal(err) => {
+                write!(f, "Internal error: {err}")
+            }
+            #[cfg(all(feature = "openssl", not(feature = "rustls")))]
+            Self::Openssl(err) => {
+                write!(f, "Openssl error: {err}")
+            }
+            #[cfg(feature = "rustls")]
+            EngineError::Encryption(err) => {
+                write!(f, "Encryption error: {}", err)
+            }
+            Self::Base64(err) => {
+                write!(f, "Base64 error: {err}")
+            }
+            Self::Uuid(err) => {
+                write!(f, "Uuid error: {err}")
+            }
+            #[cfg(any(feature = "postgresql", feature = "sqlite", feature = "sea-orm"))]
+            Self::SqlErrorCode(err) => {
+                write!(f, "Sql error: {err}")
+            }
+            #[cfg(any(feature = "postgresql", feature = "sqlite"))]
+            Self::SqlMigrationsError(err) => {
+                write!(f, "Sql migrations error: {err}")
+            }
+        }
+    }
+}
+
 impl From<uuid::Error> for EngineError {
     fn from(value: uuid::Error) -> Self {
-        Self::UUID(value)
+        Self::Uuid(value)
     }
 }
 
 impl From<serde_json::Error> for EngineError {
     fn from(e: serde_json::Error) -> Self {
-        EngineError::Serde(e)
+        Self::Serde(e)
     }
 }
 
 impl From<std::io::Error> for EngineError {
     fn from(e: std::io::Error) -> Self {
-        EngineError::Io(e)
+        Self::Io(e)
     }
 }
 
 impl From<std::str::Utf8Error> for EngineError {
     fn from(e: std::str::Utf8Error) -> Self {
-        EngineError::Utf8(e)
+        Self::Utf8(e)
     }
 }
 
 impl From<std::time::SystemTimeError> for EngineError {
     fn from(e: std::time::SystemTimeError) -> Self {
-        EngineError::Time(e)
+        Self::Time(e)
     }
 }
 
 #[cfg(all(feature = "openssl", not(feature = "rustls")))]
 impl From<openssl::error::ErrorStack> for EngineError {
     fn from(e: openssl::error::ErrorStack) -> Self {
-        EngineError::Openssl(e)
+        Self::Openssl(e)
     }
 }
 
@@ -471,62 +403,34 @@ impl From<aes_gcm::Error> for EngineError {
 
 impl From<base64::DecodeError> for EngineError {
     fn from(e: base64::DecodeError) -> Self {
-        EngineError::Base64(e)
-    }
-}
-
-#[cfg(feature = "mongo")]
-impl From<bson::de::Error> for EngineError {
-    fn from(e: bson::de::Error) -> Self {
-        EngineError::BsonDecoder(e)
-    }
-}
-
-#[cfg(feature = "mongo")]
-impl From<bson::ser::Error> for EngineError {
-    fn from(e: bson::ser::Error) -> Self {
-        EngineError::BsonEncoder(e)
-    }
-}
-
-#[cfg(feature = "mongo")]
-impl From<mongodb::error::Error> for EngineError {
-    fn from(e: mongodb::error::Error) -> Self {
-        EngineError::MongoDB(e)
-    }
-}
-
-#[cfg(feature = "dynamo")]
-impl<E: std::error::Error + 'static> From<rusoto_core::RusotoError<E>> for EngineError {
-    fn from(e: rusoto_core::RusotoError<E>) -> Self {
-        EngineError::Rusoto(e.to_string())
-    }
-}
-
-#[cfg(feature = "dynamo")]
-impl From<serde_dynamodb::Error> for EngineError {
-    fn from(e: serde_dynamodb::Error) -> Self {
-        EngineError::SerdeDynamodb(e)
+        Self::Base64(e)
     }
 }
 
 #[cfg(any(feature = "postgresql", feature = "sqlite"))]
 impl From<diesel::result::Error> for EngineError {
     fn from(e: diesel::result::Error) -> Self {
-        EngineError::SqlErrorCode(e.to_string())
+        Self::SqlErrorCode(e.to_string())
     }
 }
 
 #[cfg(any(feature = "postgresql", feature = "sqlite"))]
 impl From<Box<dyn StdError + Send + Sync>> for EngineError {
     fn from(e: Box<dyn StdError + Send + Sync>) -> Self {
-        EngineError::SqlErrorCode(e.to_string())
+        Self::SqlErrorCode(e.to_string())
     }
 }
 
 #[cfg(any(feature = "postgresql", feature = "sqlite"))]
 impl From<diesel_migrations::MigrationError> for EngineError {
     fn from(e: diesel_migrations::MigrationError) -> Self {
-        EngineError::SqlMigrationsError(e.to_string())
+        Self::SqlMigrationsError(e.to_string())
+    }
+}
+
+#[cfg(feature = "sea-orm")]
+impl From<sea_orm::DbErr> for EngineError {
+    fn from(e: sea_orm::DbErr) -> Self {
+        Self::SqlErrorCode(e.to_string())
     }
 }

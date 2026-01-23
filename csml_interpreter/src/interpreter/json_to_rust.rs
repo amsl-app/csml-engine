@@ -3,26 +3,22 @@ use crate::data::primitive::{
     PrimitiveArray, PrimitiveBoolean, PrimitiveClosure, PrimitiveFloat, PrimitiveInt,
     PrimitiveNull, PrimitiveObject, PrimitiveString,
 };
-use crate::data::{ast::Interval, Data, Literal, MessageData, MSG};
-use crate::error_format::*;
+use crate::data::{Data, Literal, MSG, MessageData, ast::Interval};
+use crate::error_format::{ERROR_JSON_TO_LITERAL, ErrorInfo, gen_error_info};
 use crate::parser::parse_string::interpolate_string;
 use std::{collections::HashMap, sync::mpsc};
 
-////////////////////////////////////////////////////////////////////////////////
-// PUBLIC FUNCTION
-////////////////////////////////////////////////////////////////////////////////
-
-pub fn interpolate(
+pub(crate) fn interpolate(
     literal: &serde_json::Value,
     interval: Interval,
     data: &mut Data,
     msg_data: &mut MessageData,
-    sender: &Option<mpsc::Sender<MSG>>,
+    sender: Option<&mpsc::Sender<MSG>>,
 ) -> Result<Literal, ErrorInfo> {
-    match literal {
-        serde_json::Value::String(val) => interpolate_string(val, data, msg_data, sender),
-        _ => json_to_literal(literal, interval, &data.context.flow),
-    }
+    let serde_json::Value::String(val) = literal else {
+        return json_to_literal(literal, interval, &data.context.flow);
+    };
+    interpolate_string(val, data, msg_data, sender)
 }
 
 pub fn json_to_literal(
@@ -53,16 +49,16 @@ pub fn json_to_literal(
                 vec.push(json_to_literal(elem, interval, flow_name)?);
             }
 
-            Ok(PrimitiveArray::get_literal(&vec, interval))
+            Ok(PrimitiveArray::get_literal(vec, interval))
         }
         serde_json::Value::Object(val) => {
             let mut map = HashMap::new();
 
-            for (k, v) in val.iter() {
-                map.insert(k.to_owned(), json_to_literal(v, interval, flow_name)?);
+            for (k, v) in val {
+                map.insert(k.clone(), json_to_literal(v, interval, flow_name)?);
             }
 
-            Ok(PrimitiveObject::get_literal(&map, interval))
+            Ok(PrimitiveObject::get_literal(map, interval))
         }
     }
 }
@@ -95,7 +91,7 @@ pub fn memory_to_literal(
                 vec.push(memory_to_literal(elem, interval, flow_name)?);
             }
 
-            Ok(PrimitiveArray::get_literal(&vec, interval))
+            Ok(PrimitiveArray::get_literal(vec, interval))
         }
 
         serde_json::Value::Object(map) if map.contains_key("_additional_info") => {
@@ -104,7 +100,7 @@ pub fn memory_to_literal(
             {
                 let mut literal = memory_to_literal(value, interval, flow_name)?;
 
-                for (k, v) in additional_info.iter() {
+                for (k, v) in additional_info {
                     literal.add_info(k, memory_to_literal(v, interval, flow_name)?);
                 }
 
@@ -130,7 +126,7 @@ pub fn memory_to_literal(
 
         serde_json::Value::Object(map) if map.contains_key("_closure") => {
             if let Some(closure_json) = map.get("_closure") {
-                let closure: PrimitiveClosure = serde_json::from_value(closure_json.to_owned())?;
+                let closure: PrimitiveClosure = serde_json::from_value(closure_json.clone())?;
 
                 Ok(Literal {
                     content_type: "closure".to_owned(),
@@ -147,10 +143,77 @@ pub fn memory_to_literal(
         serde_json::Value::Object(map) => {
             let mut obj = HashMap::new();
 
-            for (k, v) in map.iter() {
-                obj.insert(k.to_owned(), memory_to_literal(v, interval, flow_name)?);
+            for (k, v) in map {
+                obj.insert(k.clone(), memory_to_literal(v, interval, flow_name)?);
             }
-            Ok(PrimitiveObject::get_literal(&obj, interval))
+            Ok(PrimitiveObject::get_literal(obj, interval))
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_json_to_literal() {
+        let value = serde_json::json!({
+            "array": [1, 2, 3],
+            "object": {
+                "key": "value",
+                "nested": {
+                    "nested_key": "nested_value"
+                }
+            }
+        });
+        let lit = json_to_literal(&value, Interval::default(), "flow").unwrap();
+        let primitive = PrimitiveObject {
+            value: HashMap::from_iter(vec![
+                (
+                    "array".to_string(),
+                    PrimitiveArray::get_literal(
+                        vec![
+                            PrimitiveInt::get_literal(1, Interval::default()),
+                            PrimitiveInt::get_literal(2, Interval::default()),
+                            PrimitiveInt::get_literal(3, Interval::default()),
+                        ],
+                        Interval::default(),
+                    ),
+                ),
+                (
+                    "object".to_string(),
+                    PrimitiveObject::get_literal(
+                        HashMap::from_iter(vec![
+                            (
+                                "key".to_string(),
+                                PrimitiveString::get_literal("value", Interval::default()),
+                            ),
+                            (
+                                "nested".to_string(),
+                                PrimitiveObject::get_literal(
+                                    HashMap::from_iter(vec![(
+                                        "nested_key".to_string(),
+                                        PrimitiveString::get_literal(
+                                            "nested_value",
+                                            Interval::default(),
+                                        ),
+                                    )]),
+                                    Interval::default(),
+                                ),
+                            ),
+                        ]),
+                        Interval::default(),
+                    ),
+                ),
+            ]),
+        };
+        let expected_lit = Literal {
+            content_type: "object".to_string(),
+            primitive: Box::new(primitive),
+            additional_info: None,
+            secure_variable: false,
+            interval: Interval::default(),
+        };
+        assert_eq!(lit, expected_lit);
     }
 }

@@ -1,19 +1,25 @@
 #[cfg(feature = "postgresql-async")]
-use crate::future::db_connectors::{is_postgresql, postgresql_connector};
+use crate::future::db_connectors::postgresql_connector;
 
-use crate::data::AsyncDatabase;
-use crate::error_messages::ERROR_DB_SETUP;
-use crate::EngineError;
+#[cfg(feature = "sea-orm")]
+use crate::future::db_connectors::sea_orm_connector;
 
-pub async fn delete_expired_data(_db: &mut AsyncDatabase<'_>) -> Result<(), EngineError> {
-    #[cfg(feature = "postgresql-async")]
-    if is_postgresql() {
-        let db = postgresql_connector::get_db(_db)?;
+use crate::data::{AsyncDatabase, EngineError, SeaOrmDbTraits};
 
-        postgresql_connector::expired_data::delete_expired_data(db).await?;
-
-        return Ok(());
+pub async fn delete_expired_data<T: SeaOrmDbTraits>(
+    db: &mut AsyncDatabase<'_, T>,
+) -> Result<(), EngineError> {
+    match db {
+        #[cfg(feature = "postgresql-async")]
+        AsyncDatabase::Postgresql(db) => {
+            postgresql_connector::expired_data::delete_expired_data(db).await?;
+        }
+        #[cfg(feature = "sea-orm")]
+        AsyncDatabase::SeaOrm(db) => {
+            sea_orm_connector::expired_data::delete_expired_data(db.db_ref()).await?;
+        }
+        #[cfg(not(feature = "sea-orm"))]
+        AsyncDatabase::_Impossible(_, _) => unreachable!(),
     }
-
-    Err(EngineError::Manager(ERROR_DB_SETUP.to_owned()))
+    Ok(())
 }

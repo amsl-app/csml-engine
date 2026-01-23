@@ -1,5 +1,5 @@
 use crate::data::{
-    literal::{create_error_info, Literal},
+    literal::{Literal, create_error_info},
     position::Position,
 };
 
@@ -14,7 +14,7 @@ use std::collections::HashMap;
 pub struct ErrorInfo {
     pub position: Position,
     pub message: String,
-    pub additional_info: Option<HashMap<String, Literal>>,
+    pub additional_info: Option<Box<HashMap<String, Literal>>>,
 }
 
 ////////////////////////////////////////////////////////////////////////////////
@@ -22,41 +22,29 @@ pub struct ErrorInfo {
 ////////////////////////////////////////////////////////////////////////////////
 
 impl ErrorInfo {
+    #[must_use]
     pub fn new(position: Position, message: String) -> Self {
         let error_info = create_error_info(&message, position.interval);
 
         Self {
             position,
             message,
-            additional_info: Some(error_info),
+            additional_info: Some(Box::new(error_info)),
         }
     }
 
     pub fn add_info(&mut self, key: &str, value: Literal) {
-        match self.additional_info {
-            Some(ref mut map) => {
-                map.insert(key.to_owned(), value);
-            }
-            None => {
-                let mut info = HashMap::new();
-                info.insert(key.to_owned(), value);
-
-                self.additional_info = Some(info);
-            }
-        }
+        let map = self
+            .additional_info
+            .get_or_insert_with(|| Box::new(HashMap::new()));
+        map.insert(key.to_owned(), value);
     }
 
     pub fn add_info_block(&mut self, info: HashMap<String, Literal>) {
-        match self.additional_info {
-            Some(ref mut map) => {
-                for (key, value) in info {
-                    map.insert(key, value);
-                }
-            }
-            None => {
-                self.additional_info = Some(info);
-            }
-        }
+        let map = self
+            .additional_info
+            .get_or_insert_with(|| Box::new(HashMap::new()));
+        map.extend(info);
     }
 }
 
@@ -65,6 +53,7 @@ impl ErrorInfo {
 ////////////////////////////////////////////////////////////////////////////////
 
 impl ErrorInfo {
+    #[must_use]
     pub fn format_error(&self) -> String {
         format!(
             "{} at line {}, column {} at flow [{}]",
@@ -108,6 +97,16 @@ impl From<uuid::Error> for ErrorInfo {
 
 impl From<std::time::SystemTimeError> for ErrorInfo {
     fn from(e: std::time::SystemTimeError) -> Self {
+        Self {
+            position: Position::default(),
+            message: e.to_string(),
+            additional_info: None,
+        }
+    }
+}
+
+impl From<core::num::TryFromIntError> for ErrorInfo {
+    fn from(e: core::num::TryFromIntError) -> Self {
         Self {
             position: Position::default(),
             message: e.to_string(),

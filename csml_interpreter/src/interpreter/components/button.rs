@@ -1,4 +1,4 @@
-pub fn add_button(map: &mut serde_json::Map<String, serde_json::Value>) {
+pub(crate) fn add_button(map: &mut serde_json::Map<String, serde_json::Value>) {
     map.insert(
         "Button".to_owned(),
         serde_json::json!(

@@ -1,71 +1,71 @@
 use crate::parser::parse_idents::parse_idents_assignation;
 
-use crate::data::{ast::*, tokens::*};
-use crate::error_format::*;
+use crate::data::{
+    ast::{Block, BlockType, Expr, Instruction, InstructionScope},
+    tokens::{COLON, Span},
+};
+use crate::error_format::{ERROR_FN_COLON, gen_nom_error};
 use crate::parser::{
-    parse_braces::parse_r_brace, parse_comments::comment, parse_scope::parse_root,
-    parse_var_types::parse_fn_args, tools::*,
+    parse_braces::parse_brace, parse_comments::comment, parse_scope::parse_root,
+    parse_var_types::parse_fn_args, tools::get_interval,
 };
 
+use crate::data::tokens::{LBrace, RBrace, Token};
 use nom::error::{ContextError, ParseError};
 use nom::{
+    Err, IResult, Parser,
     branch::alt,
     bytes::complete::tag,
     sequence::{delimited, preceded},
-    Err, IResult,
 };
-
 ////////////////////////////////////////////////////////////////////////////////
 // PRIVATE FUNCTIONS
 ////////////////////////////////////////////////////////////////////////////////
 
-fn parse_function_scope_colon<'a, E: ParseError<Span<'a>>>(
-    s: Span<'a>,
-) -> IResult<Span<'a>, Block, E>
+fn parse_function_scope_colon<'a, E>(s: Span<'a>) -> IResult<Span<'a>, Block, E>
 where
     E: ParseError<Span<'a>> + ContextError<Span<'a>>,
 {
-    let (s, _) = match preceded(comment, tag(COLON))(s) {
+    let (s, _) = match preceded(comment, tag(COLON)).parse(s) {
         Ok((s, colon)) if *colon.fragment() == COLON => (s, colon),
         Ok(_) => return Err(gen_nom_error(s, ERROR_FN_COLON)),
 
-        Err(Err::Error((_s, _err))) | Err(Err::Failure((_s, _err))) => {
-            return Err(gen_nom_error(s, ERROR_FN_COLON))
+        Err(Err::Error((_s, _err)) | Err::Failure((_s, _err))) => {
+            return Err(gen_nom_error(s, ERROR_FN_COLON));
         }
         Err(Err::Incomplete(needed)) => return Err(Err::Incomplete(needed)),
     };
 
-    preceded(comment, parse_root)(s)
+    preceded(comment, parse_root).parse(s)
 }
 
-fn parse_function_scope<'a, E: ParseError<Span<'a>>>(s: Span<'a>) -> IResult<Span<'a>, Block, E>
+fn parse_function_scope<'a, E>(s: Span<'a>) -> IResult<Span<'a>, Block, E>
 where
     E: ParseError<Span<'a>> + ContextError<Span<'a>>,
 {
     delimited(
-        preceded(comment, tag(L_BRACE)),
+        preceded(comment, tag(LBrace::TOKEN)),
         parse_root,
-        preceded(comment, parse_r_brace),
-    )(s)
+        preceded(comment, parse_brace(RBrace)),
+    )
+    .parse(s)
 }
 
 ////////////////////////////////////////////////////////////////////////////////
 // PUBLIC FUNCTIONS
 ////////////////////////////////////////////////////////////////////////////////
 
-pub fn parse_function<'a, E: ParseError<Span<'a>>>(
-    s: Span<'a>,
-) -> IResult<Span<'a>, Vec<Instruction>, E>
+pub fn parse_function<'a, E>(s: Span<'a>) -> IResult<Span<'a>, Vec<Instruction>, E>
 where
     E: ParseError<Span<'a>> + ContextError<Span<'a>>,
 {
-    let (s, mut interval) = preceded(comment, get_interval)(s)?;
+    let (s, mut interval) = preceded(comment, get_interval).parse(s)?;
 
-    let (s, _) = preceded(comment, tag("fn"))(s)?;
-    let (s, ident) = preceded(comment, parse_idents_assignation)(s)?;
+    let (s, _) = preceded(comment, tag("fn")).parse(s)?;
+    let (s, ident) = preceded(comment, parse_idents_assignation).parse(s)?;
     let (s, args) = parse_fn_args(s)?;
 
-    let (s, scope) = alt((parse_function_scope_colon, parse_function_scope))(s)?;
+    let (s, scope) = alt((parse_function_scope_colon, parse_function_scope)).parse(s)?;
 
     let (s, end) = get_interval(s)?;
 

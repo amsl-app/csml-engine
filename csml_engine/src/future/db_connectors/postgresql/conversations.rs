@@ -1,12 +1,13 @@
-use diesel::{ExpressionMethods, QueryDsl};
+use diesel::{ExpressionMethods, OptionalExtension, QueryDsl};
 use diesel_async::RunQueryDsl;
 
 use crate::data::models::{Conversation, PaginationData};
-use crate::{data, AsyncPostgresqlClient, Client, EngineError};
+use crate::data::{AsyncPostgresqlClient, EngineError};
+use crate::{Client, data};
 use chrono::NaiveDateTime;
 use uuid::Uuid;
 
-use super::pagination::*;
+use super::pagination::Paginate;
 use crate::db_connectors::postgresql::{models, schema::csml_conversations};
 
 pub async fn create_conversation(
@@ -17,7 +18,7 @@ pub async fn create_conversation(
     db: &mut AsyncPostgresqlClient<'_>,
 ) -> Result<Uuid, EngineError> {
     let new_conversation = models::NewConversation {
-        id: uuid::Uuid::new_v4(),
+        id: Uuid::new_v4(),
         bot_id: &client.bot_id,
         channel_id: &client.channel_id,
         user_id: &client.user_id,
@@ -37,7 +38,6 @@ pub async fn create_conversation(
 
 pub async fn close_conversation(
     id: Uuid,
-    _client: &Client,
     status: &str,
     db: &mut AsyncPostgresqlClient<'_>,
 ) -> Result<(), EngineError> {
@@ -70,7 +70,7 @@ pub async fn get_latest_open(
     client: &Client,
     db: &mut AsyncPostgresqlClient<'_>,
 ) -> Result<Option<Conversation>, EngineError> {
-    let result: Result<models::Conversation, diesel::result::Error> = csml_conversations::table
+    let result: Option<models::Conversation> = csml_conversations::table
         .filter(csml_conversations::bot_id.eq(&client.bot_id))
         .filter(csml_conversations::channel_id.eq(&client.channel_id))
         .filter(csml_conversations::user_id.eq(&client.user_id))
@@ -78,49 +78,48 @@ pub async fn get_latest_open(
         .order_by(csml_conversations::updated_at.desc())
         .limit(1)
         .get_result(db.client.as_mut())
-        .await;
+        .await
+        .optional()?;
 
-    match result {
-        Ok(conv) => {
-            let conversation = conv.into();
-
-            Ok(Some(conversation))
-        }
-        Err(..) => Ok(None),
-    }
+    result.map(|conv| Ok(conv.into())).transpose()
 }
 
 pub async fn update_conversation(
     conversation_id: Uuid,
-    flow_id: Option<String>,
-    step_id: Option<String>,
+    flow_id: Option<&str>,
+    step_id: Option<&str>,
     db: &mut AsyncPostgresqlClient<'_>,
 ) -> Result<(), EngineError> {
-
     match (flow_id, step_id) {
         (Some(flow_id), Some(step_id)) => {
-            diesel::update(csml_conversations::table.filter(csml_conversations::id.eq(conversation_id)))
-                .set((
-                    csml_conversations::flow_id.eq(flow_id.as_str()),
-                    csml_conversations::step_id.eq(step_id.as_str()),
-                ))
-                .execute(db.client.as_mut())
-                .await?;
+            diesel::update(
+                csml_conversations::table.filter(csml_conversations::id.eq(conversation_id)),
+            )
+            .set((
+                csml_conversations::flow_id.eq(flow_id),
+                csml_conversations::step_id.eq(step_id),
+            ))
+            .execute(db.client.as_mut())
+            .await?;
         }
         (Some(flow_id), _) => {
-            diesel::update(csml_conversations::table.filter(csml_conversations::id.eq(conversation_id)))
-                .set(csml_conversations::flow_id.eq(flow_id.as_str()))
-                .get_result::<models::Conversation>(db.client.as_mut())
-                .await?;
+            diesel::update(
+                csml_conversations::table.filter(csml_conversations::id.eq(conversation_id)),
+            )
+            .set(csml_conversations::flow_id.eq(flow_id))
+            .get_result::<models::Conversation>(db.client.as_mut())
+            .await?;
         }
         (_, Some(step_id)) => {
-            diesel::update(csml_conversations::table.filter(csml_conversations::id.eq(conversation_id)))
-                .set(csml_conversations::step_id.eq(step_id.as_str()))
-                .get_result::<models::Conversation>(db.client.as_mut())
-                .await?;
+            diesel::update(
+                csml_conversations::table.filter(csml_conversations::id.eq(conversation_id)),
+            )
+            .set(csml_conversations::step_id.eq(step_id))
+            .get_result::<models::Conversation>(db.client.as_mut())
+            .await?;
         }
         _ => return Ok(()),
-    };
+    }
 
     Ok(())
 }
@@ -145,7 +144,7 @@ pub async fn delete_user_conversations(
 pub async fn get_conversation(
     db: &mut AsyncPostgresqlClient<'_>,
     id: Uuid,
-) -> Result<data::models::Conversation, EngineError> {
+) -> Result<Conversation, EngineError> {
     let conversation: models::Conversation = csml_conversations::table
         .find(id)
         .first(db.client.as_mut())
@@ -159,10 +158,10 @@ pub async fn get_client_conversations(
     db: &mut AsyncPostgresqlClient<'_>,
     limit: Option<u32>,
     pagination_key: Option<u32>,
-) -> Result<data::models::Paginated<data::models::Conversation>, EngineError> {
-    let pagination_key = pagination_key.unwrap_or(1);
+) -> Result<data::models::Paginated<Conversation>, EngineError> {
+    let pagination_key = pagination_key.unwrap_or(0);
 
-    let client = client.to_owned();
+    let client = client.clone();
     let mut query = csml_conversations::table
         .order_by(csml_conversations::updated_at.desc())
         .filter(csml_conversations::bot_id.eq(client.bot_id))
@@ -177,7 +176,7 @@ pub async fn get_client_conversations(
         .load_and_count_pages::<models::Conversation>(db.client.as_mut())
         .await?;
 
-    let convs: Vec<_> = conversations.into_iter().map(Into::into).collect();
+    let conversations: Vec<_> = conversations.into_iter().map(Into::into).collect();
 
     let pagination = (pagination_key < total_pages).then_some(PaginationData {
         page: pagination_key,
@@ -185,7 +184,7 @@ pub async fn get_client_conversations(
         per_page: limit_per_page,
     });
     Ok(data::models::Paginated {
-        data: convs,
+        data: conversations,
         pagination,
     })
 }

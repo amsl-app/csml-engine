@@ -1,6 +1,6 @@
 use crate::data::{
-    ast::ForgetMemory, context::ContextStepInfo, csml_logs::LogLvl, error_info::ErrorInfo,
-    hold::Hold, message::Message, primitive::PrimitiveNull, Literal, Memory, MessageData,
+    Literal, Memory, MessageData, ast::ForgetMemory, context::ContextStepInfo, csml_logs::LogLvl,
+    error_info::ErrorInfo, hold::Hold, message::Message, primitive::PrimitiveNull,
 };
 
 use std::sync::mpsc;
@@ -27,6 +27,7 @@ pub enum MSG {
         bot: Option<String>,
     },
     Error(Message),
+    Flush,
 }
 
 ////////////////////////////////////////////////////////////////////////////////
@@ -34,14 +35,16 @@ pub enum MSG {
 ////////////////////////////////////////////////////////////////////////////////
 
 impl MSG {
-    pub fn send(sender: &Option<mpsc::Sender<MSG>>, msg: MSG) {
-        if let Some(sender) = sender {
-            sender.send(msg).unwrap();
-        }
+    pub fn send(sender: Option<&mpsc::Sender<Self>>, msg: Self) {
+        sender.inspect(|sender| sender.send(msg).unwrap());
+    }
+
+    pub fn flush(sender: Option<&mpsc::Sender<Self>>) {
+        Self::send(sender, Self::Flush);
     }
 
     pub fn send_error_msg(
-        sender: &Option<mpsc::Sender<MSG>>,
+        sender: Option<&mpsc::Sender<Self>>,
         msg_data: &mut MessageData,
         value: Result<Literal, ErrorInfo>,
     ) -> Literal {
@@ -54,12 +57,12 @@ impl MSG {
                 };
                 msg_data.messages.push(message.clone());
                 if let Some(sender) = sender {
-                    let msg = MSG::Message(message);
+                    let msg = Self::Message(message);
                     sender.send(msg).unwrap();
                 }
 
                 let mut error_lit = PrimitiveNull::get_literal(err.position.interval);
-                error_lit.additional_info = err.additional_info;
+                error_lit.additional_info = err.additional_info.map(|v| *v);
 
                 error_lit
             }

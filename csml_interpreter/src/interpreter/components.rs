@@ -1,15 +1,15 @@
-pub mod audio;
-pub mod button;
-pub mod card;
-pub mod carousel;
-pub mod file;
-pub mod image;
-pub mod question;
-pub mod text;
-pub mod typing;
-pub mod url;
-pub mod video;
-pub mod wait;
+mod audio;
+mod button;
+mod card;
+mod carousel;
+mod file;
+mod image;
+mod question;
+mod text;
+mod typing;
+mod url;
+mod video;
+mod wait;
 
 use crate::data::error_info::ErrorInfo;
 use std::io::prelude::*;
@@ -41,7 +41,7 @@ fn read_components_dir(
                     map.insert(component_name.to_owned(), serde_json::json!(obj));
                 } else {
                     // TODO: error msg
-                    eprintln!("Invalid custom component formatting {:?}", component);
+                    eprintln!("Invalid custom component formatting {component:?}");
                 }
             }
         }
@@ -73,13 +73,10 @@ pub fn load_components() -> Result<serde_json::Map<String, serde_json::Value>, E
     wait::add_wait(&mut map);
 
     // load components from the `COMPONENTS_DIR` dir if any
-    let components_dir = match env::var("COMPONENTS_DIR") {
-        Ok(dir) => dir,
-        Err(_) => return Ok(map),
-    };
-
-    let components_dir = Path::new(&components_dir);
-    read_components_dir(components_dir, &mut map)?;
+    if let Ok(components_dir) = env::var("COMPONENTS_DIR") {
+        let components_dir = Path::new(&components_dir);
+        read_components_dir(components_dir, &mut map)?;
+    }
 
     Ok(map)
 }

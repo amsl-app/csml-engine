@@ -18,44 +18,32 @@ fn format_message(filepath: String) -> Result<Flow, ErrorInfo> {
 
 #[test]
 fn remember_0() {
-    let result = match format_message("CSML/basic_test/syntax/remember/remember_0.csml".to_owned())
-    {
-        Ok(_) => true,
-        Err(_) => false,
-    };
+    let result =
+        format_message("CSML/basic_test/syntax/remember/remember_0.csml".to_owned()).is_ok();
 
     assert!(result);
 }
 
 #[test]
 fn remember_1() {
-    let result = match format_message("CSML/basic_test/syntax/remember/remember_1.csml".to_owned())
-    {
-        Ok(_) => true,
-        Err(_) => false,
-    };
+    let result =
+        format_message("CSML/basic_test/syntax/remember/remember_1.csml".to_owned()).is_ok();
 
     assert!(result);
 }
 
 #[test]
 fn remember_2() {
-    let result = match format_message("CSML/basic_test/syntax/remember/remember_2.csml".to_owned())
-    {
-        Ok(_) => true,
-        Err(_) => false,
-    };
+    let result =
+        format_message("CSML/basic_test/syntax/remember/remember_2.csml".to_owned()).is_ok();
 
     assert!(result);
 }
 
 #[test]
 fn remember_3() {
-    let result = match format_message("CSML/basic_test/syntax/remember/remember_3.csml".to_owned())
-    {
-        Ok(_) => true,
-        Err(_) => false,
-    };
+    let result =
+        format_message("CSML/basic_test/syntax/remember/remember_3.csml".to_owned()).is_ok();
 
     assert!(result);
 }
@@ -66,33 +54,24 @@ fn remember_3() {
 
 #[test]
 fn remember_4() {
-    let result = match format_message("CSML/basic_test/syntax/remember/remember_4.csml".to_owned())
-    {
-        Ok(_) => false,
-        Err(_) => true,
-    };
+    let result =
+        format_message("CSML/basic_test/syntax/remember/remember_4.csml".to_owned()).is_err();
 
     assert!(result);
 }
 
 #[test]
 fn remember_5() {
-    let result = match format_message("CSML/basic_test/syntax/remember/remember_5.csml".to_owned())
-    {
-        Ok(_) => false,
-        Err(_) => true,
-    };
+    let result =
+        format_message("CSML/basic_test/syntax/remember/remember_5.csml".to_owned()).is_err();
 
     assert!(result);
 }
 
 #[test]
 fn remember_6() {
-    let result = match format_message("CSML/basic_test/syntax/remember/remember_6.csml".to_owned())
-    {
-        Ok(_) => false,
-        Err(_) => true,
-    };
+    let result =
+        format_message("CSML/basic_test/syntax/remember/remember_6.csml".to_owned()).is_err();
 
     assert!(result);
 }

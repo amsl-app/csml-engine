@@ -1,10 +1,10 @@
-use crate::data::message_data::MessageData;
-use crate::data::position::Position;
 use crate::data::Client;
 use crate::data::Literal;
-use crate::error_format::*;
+use crate::data::message_data::MessageData;
+use crate::data::position::Position;
+use crate::error_format::{ERROR_PAYLOAD_EXCEED_MAX_SIZE, ErrorInfo, gen_error_info};
 
-use serde_json::{json, map::Map, Value};
+use serde_json::{Value, json};
 
 ////////////////////////////////////////////////////////////////////////////////
 // DATA STRUCTURES
@@ -19,7 +19,7 @@ pub enum MessageType {
 #[derive(Debug, Clone)]
 pub struct Message {
     pub content_type: String,
-    pub content: serde_json::Value,
+    pub content: Value,
 }
 const MAX_PAYLOAD_SIZE: usize = 16000;
 
@@ -39,6 +39,7 @@ impl Message {
         Ok(literal.primitive.to_msg(literal.content_type))
     }
 
+    #[must_use]
     pub fn add_to_message(msg_data: MessageData, action: MessageType) -> MessageData {
         match action {
             MessageType::Msg(msg) => msg_data.add_message(msg),
@@ -46,6 +47,7 @@ impl Message {
         }
     }
 
+    #[must_use]
     pub fn switch_bot_message(bot_id: &str, client: &Client) -> Self {
         Self {
             content_type: "switch_bot".to_owned(),
@@ -53,11 +55,30 @@ impl Message {
         }
     }
 
-    pub fn message_to_json(&mut self) -> Value {
-        let mut map: Map<String, Value> = Map::new();
+    #[must_use]
+    pub fn message_to_json(&self) -> Value {
+        json! ({
+            "content_type": self.content_type,
+            "content": self.content,
+        })
+    }
+}
 
-        map.insert("content_type".to_owned(), json!(self.content_type));
-        map.insert("content".to_owned(), self.content.to_owned());
-        Value::Object(map)
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn message_to_json() {
+        let message = Message {
+            content_type: "testing".to_owned(),
+            content: json!({ "key": "value" }),
+        };
+        let expected = json!({
+            "content_type": "testing",
+            "content": { "key": "value" },
+        });
+        let res = message.message_to_json();
+        assert_eq!(res, expected);
     }
 }

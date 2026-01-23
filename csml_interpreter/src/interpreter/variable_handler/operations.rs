@@ -1,11 +1,11 @@
 use crate::data::{
-    ast::{Expr, Infix, Pretfix},
+    Data, Literal, MSG, MessageData,
+    ast::{Expr, Infix, Prefix},
     position::Position,
     primitive::boolean::PrimitiveBoolean,
     warnings::DisplayWarnings,
-    Data, Literal, MessageData, MSG,
 };
-use crate::error_format::{gen_error_info, ErrorInfo};
+use crate::error_format::{ErrorInfo, gen_error_info};
 use crate::interpreter::variable_handler::{
     expr_to_literal, interval::interval_from_expr, match_literals::match_obj,
 };
@@ -139,15 +139,15 @@ pub fn evaluate_infix(
 }
 
 pub fn evaluate_postfix(
-    postfixes: &[Pretfix],
-    expr: &Box<Expr>,
+    postfixes: &[Prefix],
+    expr: &Expr,
     data: &mut Data,
     msg_data: &mut MessageData,
-    sender: &Option<mpsc::Sender<MSG>>,
-) -> Result<Literal, ErrorInfo> {
+    sender: Option<&mpsc::Sender<MSG>>,
+) -> Literal {
     let value = valid_literal(expr_to_literal(
         expr,
-        &DisplayWarnings::Off,
+        DisplayWarnings::Off,
         None,
         data,
         msg_data,
@@ -155,13 +155,14 @@ pub fn evaluate_postfix(
     ));
     let interval = interval_from_expr(expr);
 
-    if postfixes.len() % 2 == 0 {
-        Ok(PrimitiveBoolean::get_literal(value, interval))
+    if postfixes.len().is_multiple_of(2) {
+        PrimitiveBoolean::get_literal(value, interval)
     } else {
-        Ok(PrimitiveBoolean::get_literal(!value, interval))
+        PrimitiveBoolean::get_literal(!value, interval)
     }
 }
 
+#[must_use]
 pub fn valid_literal(result: Result<Literal, ErrorInfo>) -> bool {
     match result {
         Ok(literal) => literal.primitive.as_bool(),

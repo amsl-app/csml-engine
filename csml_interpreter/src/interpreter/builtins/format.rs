@@ -1,56 +1,95 @@
-use crate::data::position::Position;
-use crate::data::primitive::{object::PrimitiveObject, PrimitiveType};
-use crate::data::{ast::Interval, ArgsType, Literal};
-use crate::error_format::*;
+use crate::data::primitive::object::PrimitiveObject;
+use crate::data::{ArgsType, Literal, ast::Interval};
+use crate::error_format::{ERROR_BASE64, ERROR_HEX, ErrorInfo};
+use crate::interpreter::builtins;
 use std::collections::HashMap;
 
-pub fn debug(args: ArgsType, interval: Interval) -> Result<Literal, ErrorInfo> {
-    Ok(args.args_to_debug(interval))
+pub(crate) fn debug(args: ArgsType, interval: Interval) -> Literal {
+    args.args_to_debug(interval)
 }
 
 // TODO: old builtin need to be rm when no one use it
-pub fn object(object: ArgsType, flow_name: &str, interval: Interval) -> Result<Literal, ErrorInfo> {
+#[allow(clippy::needless_pass_by_value)]
+pub(crate) fn object(
+    object: ArgsType,
+    flow_name: &str,
+    interval: Interval,
+) -> Result<Literal, ErrorInfo> {
     let mut map = HashMap::new();
 
     object.populate(&mut map, &[], flow_name, interval)?;
 
-    Ok(PrimitiveObject::get_literal(&map, interval))
+    Ok(PrimitiveObject::get_literal(map, interval))
 }
 
-pub fn base64(args: ArgsType, flow_name: &str, interval: Interval) -> Result<Literal, ErrorInfo> {
-    match args.get("string", 0) {
-        Some(literal) if literal.primitive.get_type() == PrimitiveType::PrimitiveString => {
-            let mut object: HashMap<String, Literal> = HashMap::new();
-            object.insert("string".to_owned(), literal.to_owned());
+pub(crate) fn base64(
+    args: ArgsType,
+    flow_name: &str,
+    interval: Interval,
+) -> Result<Literal, ErrorInfo> {
+    builtins::typed_object(args, "string", "base64", flow_name, interval, ERROR_BASE64)
+}
 
-            let mut result = PrimitiveObject::get_literal(&object, interval);
+pub(crate) fn hex(
+    args: ArgsType,
+    flow_name: &str,
+    interval: Interval,
+) -> Result<Literal, ErrorInfo> {
+    builtins::typed_object(args, "string", "hex", flow_name, interval, ERROR_HEX)
+}
 
-            result.set_content_type("base64");
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::data::primitive::{PrimitiveBoolean, PrimitiveString};
 
-            Ok(result)
-        }
-        _ => Err(gen_error_info(
-            Position::new(interval, flow_name),
-            ERROR_HTTP.to_owned(),
-        )),
+    fn test_typed_object<F: Fn(ArgsType, &str, Interval) -> Result<Literal, ErrorInfo>>(
+        content_type: &str,
+        f: F,
+    ) {
+        let args = ArgsType::Normal(HashMap::from([(
+            "arg0".to_owned(),
+            PrimitiveString::get_literal("test", Interval::default()),
+        )]));
+
+        let result = f(args, "test-flow", Interval::default()).unwrap();
+        let expected = PrimitiveObject::get_literal_with_type(
+            content_type,
+            HashMap::from([(
+                "string".to_owned(),
+                PrimitiveString::get_literal("test", Interval::default()),
+            )]),
+            Interval::default(),
+        );
+
+        assert_eq!(result, expected);
     }
-}
 
-pub fn hex(args: ArgsType, flow_name: &str, interval: Interval) -> Result<Literal, ErrorInfo> {
-    match args.get("string", 0) {
-        Some(literal) if literal.primitive.get_type() == PrimitiveType::PrimitiveString => {
-            let mut object: HashMap<String, Literal> = HashMap::new();
-            object.insert("string".to_owned(), literal.to_owned());
+    #[test]
+    fn test_base64() {
+        test_typed_object("base64", base64);
+    }
 
-            let mut result = PrimitiveObject::get_literal(&object, interval);
+    #[test]
+    fn test_hex() {
+        test_typed_object("hex", hex);
+    }
 
-            result.set_content_type("hex");
+    #[test]
+    fn test_with_empty_args() {
+        let args = ArgsType::Normal(HashMap::new());
+        let result = base64(args, "test-flow", Interval::default());
+        assert!(result.is_err());
+    }
 
-            Ok(result)
-        }
-        _ => Err(gen_error_info(
-            Position::new(interval, flow_name),
-            ERROR_HTTP.to_owned(),
-        )),
+    #[test]
+    fn test_with_invalid_args() {
+        let args = ArgsType::Normal(HashMap::from([(
+            "arg0".to_owned(),
+            PrimitiveBoolean::get_literal(true, Interval::default()),
+        )]));
+
+        let result = base64(args, "test-flow", Interval::default());
+        assert!(result.is_err());
     }
 }

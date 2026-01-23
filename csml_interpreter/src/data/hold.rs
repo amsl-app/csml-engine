@@ -1,7 +1,7 @@
 use crate::data::{Data, Literal};
 use serde::{Deserialize, Serialize};
 
-use super::data::PreviousInfo;
+use super::core::PreviousInfo;
 
 ////////////////////////////////////////////////////////////////////////////////
 // DATA STRUCTURE
@@ -28,6 +28,7 @@ pub struct Hold {
 ////////////////////////////////////////////////////////////////////////////////
 
 impl Hold {
+    #[must_use]
     pub fn new(
         index: IndexInfo,
         step_vars: serde_json::Value,
@@ -45,16 +46,18 @@ impl Hold {
             secure,
         }
     }
+}
 
-    pub fn default() -> Self {
+impl Default for Hold {
+    fn default() -> Self {
         Self {
             index: IndexInfo {
                 command_index: 0,
                 loop_index: vec![],
             },
             step_vars: serde_json::json!({}),
-            step_name: "".to_owned(),
-            flow_name: "".to_owned(),
+            step_name: String::new(),
+            flow_name: String::new(),
             previous: None,
             secure: false,
         }

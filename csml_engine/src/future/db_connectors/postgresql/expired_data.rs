@@ -1,7 +1,6 @@
+use crate::data::{AsyncPostgresqlClient, EngineError};
 use diesel::{ExpressionMethods, QueryDsl};
 use diesel_async::RunQueryDsl;
-
-use crate::{AsyncPostgresqlClient, EngineError};
 
 use crate::db_connectors::postgresql::schema::{csml_conversations, csml_memories, csml_states};
 

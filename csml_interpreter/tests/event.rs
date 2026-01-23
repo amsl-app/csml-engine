@@ -18,10 +18,10 @@ fn event_step_0() {
             {"content":{"text": "content"}, "content_type":"text"}
         ]}"#;
     let msg = format_message(
-        Event::new(
+        &Event::new(
             "content_type",
             "content",
-            serde_json::Value::Object(serde_json::Map::new()),
+            Value::Object(serde_json::Map::new()),
         ),
         Context::new(
             HashMap::new(),
@@ -38,7 +38,7 @@ fn event_step_0() {
     let v1: Value = message_to_json_value(msg);
     let v2: Value = serde_json::from_str(data).unwrap();
 
-    assert_eq!(v1, v2)
+    assert_eq!(v1, v2);
 }
 
 #[test]
@@ -57,12 +57,12 @@ fn event_step_1() {
 
     other_map.insert(
         "yolo".to_owned(),
-        serde_json::Value::String("my name is yolo".to_owned()),
+        Value::String("my name is yolo".to_owned()),
     );
-    map.insert("toto".to_owned(), serde_json::Value::Object(other_map));
+    map.insert("toto".to_owned(), Value::Object(other_map));
 
     let msg = format_message(
-        Event::new("content_type", "content", serde_json::Value::Object(map)),
+        &Event::new("content_type", "content", Value::Object(map)),
         Context::new(
             HashMap::new(),
             HashMap::new(),
@@ -78,7 +78,7 @@ fn event_step_1() {
     let v1: Value = message_to_json_value(msg);
     let v2: Value = serde_json::from_str(data).unwrap();
 
-    assert_eq!(v1, v2)
+    assert_eq!(v1, v2);
 }
 
 #[test]
@@ -90,10 +90,10 @@ fn event_step_2() {
             {"content":{"text": "content_type"}, "content_type":"text"}
         ]}"#;
     let msg = format_message(
-        Event::new(
+        &Event::new(
             "content_type",
             "content",
-            serde_json::Value::Object(serde_json::Map::new()),
+            Value::Object(serde_json::Map::new()),
         ),
         Context::new(
             HashMap::new(),
@@ -110,7 +110,7 @@ fn event_step_2() {
     let v1: Value = message_to_json_value(msg);
     let v2: Value = serde_json::from_str(data).unwrap();
 
-    assert_eq!(v1, v2)
+    assert_eq!(v1, v2);
 }
 
 #[test]
@@ -122,10 +122,10 @@ fn event_step_3() {
             {"content":{}, "content_type":"content_type"}
         ]}"#;
     let msg = format_message(
-        Event::new(
+        &Event::new(
             "content_type",
             "content",
-            serde_json::Value::Object(serde_json::Map::new()),
+            Value::Object(serde_json::Map::new()),
         ),
         Context::new(
             HashMap::new(),
@@ -142,7 +142,7 @@ fn event_step_3() {
     let v1: Value = message_to_json_value(msg);
     let v2: Value = serde_json::from_str(data).unwrap();
 
-    assert_eq!(v1, v2)
+    assert_eq!(v1, v2);
 }
 
 #[test]
@@ -156,13 +156,10 @@ fn event_step_4() {
 
     let mut map = serde_json::Map::new();
 
-    map.insert(
-        "text".to_owned(),
-        serde_json::Value::String("42".to_owned()),
-    );
+    map.insert("text".to_owned(), Value::String("42".to_owned()));
 
     let msg = format_message(
-        Event::new("content_type", "content", serde_json::Value::Object(map)),
+        &Event::new("content_type", "content", Value::Object(map)),
         Context::new(
             HashMap::new(),
             HashMap::new(),
@@ -178,7 +175,7 @@ fn event_step_4() {
     let v1: Value = message_to_json_value(msg);
     let v2: Value = serde_json::from_str(data).unwrap();
 
-    assert_eq!(v1, v2)
+    assert_eq!(v1, v2);
 }
 
 #[test]
@@ -192,13 +189,10 @@ fn event_step_5() {
 
     let mut map = serde_json::Map::new();
 
-    map.insert(
-        "text".to_owned(),
-        serde_json::Value::String("hola@toto.com".to_owned()),
-    );
+    map.insert("text".to_owned(), Value::String("hola@toto.com".to_owned()));
 
     let msg = format_message(
-        Event::new("content_type", "content", serde_json::Value::Object(map)),
+        &Event::new("content_type", "content", Value::Object(map)),
         Context::new(
             HashMap::new(),
             HashMap::new(),
@@ -214,7 +208,7 @@ fn event_step_5() {
     let v1: Value = message_to_json_value(msg);
     let v2: Value = serde_json::from_str(data).unwrap();
 
-    assert_eq!(v1, v2)
+    assert_eq!(v1, v2);
 }
 
 #[test]
@@ -228,10 +222,10 @@ fn event_step_6() {
 
     let mut map = serde_json::Map::new();
 
-    map.insert("text".to_owned(), serde_json::Value::String("a".to_owned()));
+    map.insert("text".to_owned(), Value::String("a".to_owned()));
 
     let msg = format_message(
-        Event::new("content_type", "content", serde_json::Value::Object(map)),
+        &Event::new("content_type", "content", Value::Object(map)),
         Context::new(
             HashMap::new(),
             HashMap::new(),
@@ -247,7 +241,7 @@ fn event_step_6() {
     let v1: Value = message_to_json_value(msg);
     let v2: Value = serde_json::from_str(data).unwrap();
 
-    assert_eq!(v1, v2)
+    assert_eq!(v1, v2);
 }
 
 #[test]
@@ -261,13 +255,10 @@ fn event_step_7() {
 
     let mut map = serde_json::Map::new();
 
-    map.insert(
-        "payload".to_owned(),
-        serde_json::Value::String("a".to_owned()),
-    );
+    map.insert("payload".to_owned(), Value::String("a".to_owned()));
 
     let msg = format_message(
-        Event::new("content_type", "text", serde_json::Value::Object(map)),
+        &Event::new("content_type", "text", Value::Object(map)),
         Context::new(
             HashMap::new(),
             HashMap::new(),
@@ -283,7 +274,7 @@ fn event_step_7() {
     let v1: Value = message_to_json_value(msg);
     let v2: Value = serde_json::from_str(data).unwrap();
 
-    assert_eq!(v1, v2)
+    assert_eq!(v1, v2);
 }
 
 #[test]
@@ -297,10 +288,10 @@ fn event_step_8() {
 
     let mut map = serde_json::Map::new();
 
-    map.insert("text".to_owned(), serde_json::Value::String("b".to_owned()));
+    map.insert("text".to_owned(), Value::String("b".to_owned()));
 
     let msg = format_message(
-        Event::new("content_type", "content", serde_json::Value::Object(map)),
+        &Event::new("content_type", "content", Value::Object(map)),
         Context::new(
             HashMap::new(),
             HashMap::new(),
@@ -316,7 +307,7 @@ fn event_step_8() {
     let v1: Value = message_to_json_value(msg);
     let v2: Value = serde_json::from_str(data).unwrap();
 
-    assert_eq!(v1, v2)
+    assert_eq!(v1, v2);
 }
 
 #[test]
@@ -330,10 +321,10 @@ fn event_step_9() {
 
     let mut map = serde_json::Map::new();
 
-    map.insert("text".to_owned(), serde_json::Value::String("a".to_owned()));
+    map.insert("text".to_owned(), Value::String("a".to_owned()));
 
     let msg = format_message(
-        Event::new("content_type", "content", serde_json::Value::Object(map)),
+        &Event::new("content_type", "content", Value::Object(map)),
         Context::new(
             HashMap::new(),
             HashMap::new(),
@@ -349,7 +340,7 @@ fn event_step_9() {
     let v1: Value = message_to_json_value(msg);
     let v2: Value = serde_json::from_str(data).unwrap();
 
-    assert_eq!(v1, v2)
+    assert_eq!(v1, v2);
 }
 
 #[test]
@@ -367,38 +358,36 @@ fn event_types() {
     let ok_types = ["text", "payload"];
     let err_types = ["file", "audio", "video", "image", "url", "flow_trigger"];
 
-    for ok_type in ok_types.iter() {
+    for ok_type in &ok_types {
         let mut map = serde_json::Map::new();
-        map.insert(
-            ok_type.to_string(),
-            serde_json::Value::String("42".to_owned()),
-        );
+        map.insert((*ok_type).to_string(), Value::String("42".to_owned()));
         let msg = format_message(
-            Event::new("content_type", "content", serde_json::Value::Object(map)),
+            &Event::new("content_type", "content", Value::Object(map)),
             context.clone(),
             "CSML/basic_test/event.csml",
         );
         let messages: Value = message_to_json_value(msg);
-        if Some("true") != messages["messages"][0]["content"]["text"].as_str() {
-            panic!("{} event type can't be use as string", ok_type)
-        }
-    }
-    // We should get 2 messages warning and null because we can't use string methods whit this types
-    for err_type in err_types.iter() {
-        let mut map = serde_json::Map::new();
-        map.insert(
-            err_type.to_string(),
-            serde_json::Value::String("42".to_owned()),
+        assert_eq!(
+            Some("true"),
+            messages["messages"][0]["content"]["text"].as_str(),
+            "{ok_type} event type can't be use as string"
         );
+    }
+    // We should get 2 messages warning and null because we can't use string methods with this types
+    for err_type in &err_types {
+        let mut map = serde_json::Map::new();
+        map.insert((*err_type).to_string(), Value::String("42".to_owned()));
         let msg = format_message(
-            Event::new("content_type", "content", serde_json::Value::Object(map)),
+            &Event::new("content_type", "content", Value::Object(map)),
             context.clone(),
             "CSML/basic_test/event.csml",
         );
         let messages: Value = message_to_json_value(msg);
 
-        if "null" != &messages["messages"][1]["content"]["text"].to_string() {
-            panic!("{} event type is use as string", err_type)
-        }
+        assert_eq!(
+            "null",
+            &messages["messages"][1]["content"]["text"].to_string(),
+            "{err_type} event type is use as string"
+        );
     }
 }

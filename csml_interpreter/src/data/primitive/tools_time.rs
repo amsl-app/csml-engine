@@ -1,40 +1,42 @@
 use crate::data::{
+    Literal,
     ast::Interval,
     error_info::ErrorInfo,
     position::Position,
     primitive::PrimitiveType,
     primitive::{Data, PrimitiveInt, PrimitiveNull, PrimitiveObject},
-    Literal,
 };
-use crate::error_format::*;
+use crate::error_format::gen_error_info;
 use chrono::{DateTime, NaiveDate, NaiveDateTime, SecondsFormat, TimeZone, Utc};
+use std::borrow::Cow;
 use std::collections::HashMap;
+use std::hash::BuildHasher;
 
 ////////////////////////////////////////////////////////////////////////////////
 // PRIVATE FUNCTIONS
 ////////////////////////////////////////////////////////////////////////////////
 
-fn get_date_string(
-    args: &HashMap<String, Literal>,
+fn get_date_string<S: BuildHasher, E: Into<Cow<'static, str>>>(
+    args: &HashMap<String, Literal, S>,
     index: usize,
     data: &mut Data,
     interval: Interval,
-    error: &str,
+    error: E,
 ) -> Result<String, ErrorInfo> {
-    match args.get(&format!("arg{}", index)) {
+    match args.get(&format!("arg{index}")) {
         Some(literal) if literal.primitive.get_type() == PrimitiveType::PrimitiveString => {
-            let value = Literal::get_value::<String>(
+            let value = Literal::get_value::<String, _>(
                 &literal.primitive,
                 &data.context.flow,
                 literal.interval,
-                error.to_string(),
+                error,
             )?;
 
-            Ok(value.to_owned())
+            Ok(value.clone())
         }
         _ => Err(gen_error_info(
             Position::new(interval, &data.context.flow),
-            error.to_string(),
+            error.into().into_owned(),
         )),
     }
 }
@@ -43,7 +45,8 @@ fn get_date_string(
 // PUBLIC FUNCTIONS
 ////////////////////////////////////////////////////////////////////////////////
 
-pub fn get_date(args: &HashMap<String, Literal>) -> [i64; 7] {
+#[must_use]
+pub fn get_date<S: BuildHasher>(args: &HashMap<String, Literal, S>) -> [i64; 7] {
     let mut date: [i64; 7] = [0; 7];
 
     // set default month, day, and hour to 1 year does not need to have a default
@@ -54,22 +57,22 @@ pub fn get_date(args: &HashMap<String, Literal>) -> [i64; 7] {
 
     let len = args.len();
 
-    for index in 0..len {
-        match args.get(&format!("arg{}", index)) {
-            Some(lit) if lit.primitive.get_type() == PrimitiveType::PrimitiveInt => {
-                let value = serde_json::from_str(&lit.primitive.to_string()).unwrap();
+    for (index, item) in date.iter_mut().enumerate().take(len) {
+        let Some(lit) = args.get(&format!("arg{index}")) else {
+            continue;
+        };
+        if lit.primitive.get_type() == PrimitiveType::PrimitiveInt {
+            let value = serde_json::from_str(&lit.primitive.to_string()).unwrap();
 
-                date[index] = value;
-            }
-            _ => {}
+            *item = value;
         }
     }
 
     date
 }
 
-pub fn parse_rfc3339(
-    args: &HashMap<String, Literal>,
+pub fn parse_rfc3339<S: BuildHasher>(
+    args: &HashMap<String, Literal, S>,
     data: &mut Data,
     interval: Interval,
 ) -> Result<Literal, ErrorInfo> {
@@ -89,43 +92,40 @@ pub fn parse_rfc3339(
         10 => format!("{}T{a2}:{a2}:{a2}Z", date_str, a2 = "00"),
         13 => format!("{}:{a2}:{a2}Z", date_str, a2 = "00"),
         16 => format!("{}:{a2}Z", date_str, a2 = "00"),
-        19 => format!("{}Z", date_str),
-        _ => date_str.to_owned(),
+        19 => format!("{date_str}Z"),
+        _ => date_str.clone(),
     };
 
-    let date = match DateTime::parse_from_rfc3339(&date_str) {
-        Ok(date) => date,
-        Err(_) => {
-            return Err(gen_error_info(
-                Position::new(interval, &data.context.flow),
-                usage.to_string(),
-            ))
-        }
-    };
+    let date = DateTime::parse_from_rfc3339(&date_str).map_err(|_| {
+        gen_error_info(
+            Position::new(interval, &data.context.flow),
+            usage.to_string(),
+        )
+    })?;
 
     let mut object = HashMap::new();
 
     object.insert(
         "milliseconds".to_owned(),
-        PrimitiveInt::get_literal(date.naive_utc().timestamp_millis(), interval),
+        PrimitiveInt::get_literal(date.to_utc().timestamp_millis(), interval),
     );
 
     let offset: i32 = date.timezone().local_minus_utc();
     if offset != 0 {
         object.insert(
             "offset".to_owned(),
-            PrimitiveInt::get_literal(offset as i64, interval),
+            PrimitiveInt::get_literal(i64::from(offset), interval),
         );
     }
 
-    let mut lit = PrimitiveObject::get_literal(&object, interval);
+    let mut lit = PrimitiveObject::get_literal(object, interval);
     lit.set_content_type("time");
 
     Ok(lit)
 }
 
-pub fn pasre_from_str(
-    args: &HashMap<String, Literal>,
+pub fn pasre_from_str<S: BuildHasher>(
+    args: &HashMap<String, Literal, S>,
     data: &mut Data,
     interval: Interval,
 ) -> Result<Literal, ErrorInfo> {
@@ -138,14 +138,14 @@ pub fn pasre_from_str(
     let format_str = get_date_string(args, 1, data, interval, usage)?;
 
     let date_millis = if let Ok(date) = DateTime::parse_from_str(&date_str, &format_str) {
-        date.naive_utc().timestamp_millis()
+        date.to_utc().timestamp_millis()
     } else if let Ok(naive_datetime) = NaiveDateTime::parse_from_str(&date_str, &format_str) {
-        let date = DateTime::<Utc>::from_utc(naive_datetime, Utc);
-        date.naive_utc().timestamp_millis()
+        let date = DateTime::<Utc>::from_naive_utc_and_offset(naive_datetime, Utc);
+        date.to_utc().timestamp_millis()
     } else if let Ok(naive_date) = NaiveDate::parse_from_str(&date_str, &format_str) {
         let naive_datetime: NaiveDateTime = naive_date.and_hms_opt(0, 0, 0).unwrap();
-        let date = DateTime::<Utc>::from_utc(naive_datetime, Utc);
-        date.naive_utc().timestamp_millis()
+        let date = DateTime::<Utc>::from_naive_utc_and_offset(naive_datetime, Utc);
+        date.to_utc().timestamp_millis()
     } else {
         return Err(gen_error_info(
             Position::new(interval, &data.context.flow),
@@ -159,15 +159,15 @@ pub fn pasre_from_str(
         PrimitiveInt::get_literal(date_millis, interval),
     );
 
-    let mut lit = PrimitiveObject::get_literal(&object, interval);
+    let mut lit = PrimitiveObject::get_literal(object, interval);
     lit.set_content_type("time");
 
     Ok(lit)
 }
 
-pub fn format_date<Tz>(
-    args: &HashMap<String, Literal>,
-    date: DateTime<Tz>,
+pub fn format_date<Tz, S: BuildHasher>(
+    args: &HashMap<String, Literal, S>,
+    date: &DateTime<Tz>,
     data: &mut Data,
     interval: Interval,
     use_z: bool,
@@ -176,22 +176,21 @@ where
     Tz: TimeZone,
     Tz::Offset: core::fmt::Display,
 {
-    match args.len() {
-        0 => Ok(date.to_rfc3339_opts(SecondsFormat::Millis, use_z)),
-        _ => {
-            let format_lit = match args.get("arg0") {
-                Some(res) => res.to_owned(),
-                _ => PrimitiveNull::get_literal(Interval::default()),
-            };
-
-            let format = Literal::get_value::<String>(
-                &format_lit.primitive,
-                &data.context.flow,
-                interval,
-                "format parameter must be of type string".to_string(),
-            )?;
-
-            Ok(date.format(format).to_string())
-        }
+    if args.is_empty() {
+        return Ok(date.to_rfc3339_opts(SecondsFormat::Millis, use_z));
     }
+
+    let format_lit = args
+        .get("arg0")
+        .cloned()
+        .unwrap_or_else(|| PrimitiveNull::get_literal(Interval::default()));
+
+    let format = Literal::get_value::<String, _>(
+        &format_lit.primitive,
+        &data.context.flow,
+        interval,
+        "format parameter must be of type string",
+    )?;
+
+    Ok(date.format(format).to_string())
 }
