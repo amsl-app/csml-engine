@@ -56,8 +56,8 @@ fn read_components_dir(
 // PUBLIC FUNCTION
 ////////////////////////////////////////////////////////////////////////////////
 
-pub fn load_components() -> Result<serde_json::Map<String, serde_json::Value>, ErrorInfo> {
-    let mut map = serde_json::Map::new();
+pub fn load_native_components() -> serde_json::Map<String, serde_json::Value> {
+    let mut map = serde_json::Map::with_capacity(12);
 
     audio::add_audio(&mut map);
     button::add_button(&mut map);
@@ -71,6 +71,12 @@ pub fn load_components() -> Result<serde_json::Map<String, serde_json::Value>, E
     url::add_url(&mut map);
     video::add_video(&mut map);
     wait::add_wait(&mut map);
+
+    map
+}
+
+pub fn load_components() -> Result<serde_json::Map<String, serde_json::Value>, ErrorInfo> {
+    let mut map = load_native_components();
 
     // load components from the `COMPONENTS_DIR` dir if any
     if let Ok(components_dir) = env::var("COMPONENTS_DIR") {
