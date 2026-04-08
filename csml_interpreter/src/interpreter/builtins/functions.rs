@@ -2,17 +2,17 @@ use crate::data::position::Position;
 use crate::data::primitive::{
     PrimitiveArray, PrimitiveBoolean, PrimitiveFloat, PrimitiveInt, PrimitiveString,
 };
-use num_traits::ToPrimitive;
-use std::array;
-use std::time::{SystemTime, UNIX_EPOCH};
-use rand::RngExt;
 use crate::data::{ArgsType, Literal, ast::Interval};
 use crate::error_format::{
     ERROR_FIND, ERROR_FLOOR, ERROR_LENGTH, ERROR_LENGTH_OVERFLOW, ERROR_ONE_OF, ERROR_SHUFFLE,
     ERROR_UUID, ErrorInfo, gen_error_info,
 };
+use num_traits::ToPrimitive;
+use rand::RngExt;
+use std::array;
+use std::time::{SystemTime, UNIX_EPOCH};
+use uuid::v1::Timestamp;
 use uuid::{ContextV1, Uuid};
-use uuid::v1::{Timestamp};
 
 use rand::seq::SliceRandom;
 
