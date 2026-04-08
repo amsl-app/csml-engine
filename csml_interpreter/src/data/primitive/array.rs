@@ -26,7 +26,7 @@ use crate::interpreter::variable_handler::resolve_csml_object::{
 };
 use num_traits::ToPrimitive;
 use phf::phf_map;
-use rand::Rng;
+use rand::{RngExt};
 use rand::seq::SliceRandom;
 use serde::{Deserialize, Serialize};
 use serde_json::json;

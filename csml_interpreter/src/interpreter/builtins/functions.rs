@@ -5,16 +5,15 @@ use crate::data::primitive::{
 use num_traits::ToPrimitive;
 use std::array;
 use std::time::{SystemTime, UNIX_EPOCH};
-
+use rand::RngExt;
 use crate::data::{ArgsType, Literal, ast::Interval};
 use crate::error_format::{
     ERROR_FIND, ERROR_FLOOR, ERROR_LENGTH, ERROR_LENGTH_OVERFLOW, ERROR_ONE_OF, ERROR_SHUFFLE,
     ERROR_UUID, ErrorInfo, gen_error_info,
 };
-use uuid::Uuid;
-use uuid::v1::{Context, Timestamp};
+use uuid::{ContextV1, Uuid};
+use uuid::v1::{Timestamp};
 
-use rand::Rng;
 use rand::seq::SliceRandom;
 
 pub(crate) fn one_of(
@@ -208,7 +207,7 @@ pub(crate) fn uuid_command(
         "v1" => {
             let mut rng = rand::rng();
             let time = SystemTime::now().duration_since(UNIX_EPOCH)?;
-            let context = Context::new(rng.random());
+            let context = ContextV1::new(rng.random());
             let ts = Timestamp::from_unix(context, time.as_secs(), time.subsec_nanos());
 
             let node_id: [u8; 6] = array::from_fn(|_| rng.random());
