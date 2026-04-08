@@ -23,9 +23,6 @@ jobs:
   build:
     name: Build
     runs-on: ubuntu-latest
-    defaults:
-      run:
-        working-directory: csml-engine
 
     steps:
       - name: Checkout code
@@ -48,10 +45,6 @@ jobs:
   check:
     name: Check (Clippy)
     runs-on: ubuntu-latest
-    defaults:
-      run:
-        working-directory: csml-engine
-
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -70,9 +63,6 @@ jobs:
   test:
     name: Test
     runs-on: ubuntu-latest
-    defaults:
-      run:
-        working-directory: csml-engine
     env:
       RUST_LOG: trace,tokio_postgres=info
 
