@@ -89,7 +89,7 @@ impl Hash for InstructionScope {
     fn hash<H: Hasher>(&self, state: &mut H) {
         match self {
             Self::StepScope(name) | Self::FunctionScope { name, .. } | Self::Constant(name) => {
-                name.hash(state)
+                name.hash(state);
             }
             Self::ImportScope(import_scope) => import_scope.hash(state),
             Self::InsertStep(insert_step) => insert_step.hash(state),
