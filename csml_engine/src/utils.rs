@@ -306,8 +306,7 @@ pub fn get_current_step_hash(context: &Context, bot: &CsmlBot) -> Result<String,
     };
 
     hash.update(step.as_bytes());
-
-    Ok(format!("{:x}", hash.finalize()))
+    Ok(hex::encode(hash.finalize()))
 }
 
 pub fn get_ttl_duration_value(event: Option<&Event>) -> Option<chrono::Duration> {
