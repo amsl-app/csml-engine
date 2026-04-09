@@ -6,6 +6,7 @@ pub(crate) mod linter;
 pub mod parser;
 
 pub use interpreter::components::load_components;
+pub use interpreter::components::load_native_components;
 pub use parser::step_checksum::get_step;
 
 use interpreter::{interpret_scope, json_to_literal};
