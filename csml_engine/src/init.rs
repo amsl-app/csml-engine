@@ -8,10 +8,14 @@ use csml_interpreter::{BINCODE_CONFIG, load_components, search_for_modules, vali
  */
 pub fn init_bot(bot: &mut CsmlBot) -> Result<(), EngineError> {
     // load native components into the bot
-    bot.native_components = match load_components() {
-        Ok(components) => Some(components),
-        Err(err) => return Err(EngineError::Interpreter(err.format_error())),
-    };
+
+    if bot.native_components.is_none() {
+        // if the bot doesn't already have native components, load them and set them in the bot
+        bot.native_components = match load_components() {
+            Ok(components) => Some(components),
+            Err(err) => return Err(EngineError::Interpreter(err.format_error())),
+        };
+    }
 
     if let Err(err) = search_for_modules(bot) {
         return Err(EngineError::Interpreter(format!("{err:?}")));
