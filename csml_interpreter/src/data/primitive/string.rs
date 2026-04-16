@@ -1724,7 +1724,19 @@ impl Primitive for PrimitiveString {
     }
 
     fn do_add(&self, other: &dyn Primitive) -> Result<Box<dyn Primitive>, String> {
-        self.do_op(other, checked::CheckedAdd::checked_add, ops::Add::add, "+")
+        match self.do_op(other, checked::CheckedAdd::checked_add, ops::Add::add, "+") {
+            Ok(res) => Ok(res),
+            Err(_) => {
+                if let Some(rhs) = other.as_any().downcast_ref::<Self>() {
+                    return Ok(Box::new(PrimitiveString::new(format!(
+                        "{}{}",
+                        self.value, rhs.value
+                    ))));
+                }
+
+                Err(ERROR_STRING_RHS.to_owned())
+            }
+        }
     }
 
     fn do_sub(&self, other: &dyn Primitive) -> Result<Box<dyn Primitive>, String> {
