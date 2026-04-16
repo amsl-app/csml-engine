@@ -14,12 +14,14 @@ fn string_step_0() {
     let data = r#"{
         "memories":[
             {"key":"s", "value":"Hello "},
-            {"key":"s", "value":"Hello World"}
+            {"key":"s", "value":"Hello World"},
+            {"key":"s", "value":"Hello World!"}
         ],
         "messages":[
             {"content":{"text": "Hello World"}, "content_type":"text"},
-            {"content":{"text": "HELLO WORLD"}, "content_type":"text"},
-            {"content":{"text": "hello world"}, "content_type":"text"}
+            {"content":{"text": "Hello World!"}, "content_type":"text"},
+            {"content":{"text": "HELLO WORLD!"}, "content_type":"text"},
+            {"content":{"text": "hello world!"}, "content_type":"text"}
         ]}"#;
     let msg = format_message(
         &Event::new("payload", "", serde_json::json!({})),
@@ -393,9 +395,9 @@ fn string_step_12b_slice_error() {
     let data = r#"{
         "memories":[],
         "messages":[
-            { "content_type": "error", "content": {"error": "usage: slice(start: Integer, end: Optional<Integer>) => string at line 95, column 23 at flow [flow]"} },
+            { "content_type": "error", "content": {"error": "usage: slice(start: Integer, end: Optional<Integer>) => string at line 99, column 23 at flow [flow]"} },
             { "content_type": "text", "content": {"text": null} },
-            { "content_type": "error", "content": {"error": "usage: slice(start: Integer, end: Optional<Integer>) => string at line 96, column 23 at flow [flow]"} },
+            { "content_type": "error", "content": {"error": "usage: slice(start: Integer, end: Optional<Integer>) => string at line 100, column 23 at flow [flow]"} },
             { "content_type": "text", "content": {"text": null} }
         ]}"#;
     let msg = format_message(

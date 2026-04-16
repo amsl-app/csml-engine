@@ -1653,6 +1653,25 @@ impl PrimitiveString {
 }
 
 impl PrimitiveString {
+    fn get_numeric_values(&self, rhs: &Self) -> Option<(Integer, Integer)> {
+        get_integer(&self.value).zip(get_integer(&rhs.value))
+    }
+
+    fn apply_numeric_op<FI: FnOnce(&i64, &i64) -> Option<i64>, FF: FnOnce(f64, f64) -> f64>(
+        left: Integer,
+        right: Integer,
+        fi: FI,
+        ff: FF,
+    ) -> Box<dyn Primitive> {
+        if let (Integer::Int(left), Integer::Int(right)) = (left, right)
+            && let Some(result) = fi(&left, &right)
+        {
+            return Box::new(PrimitiveInt::new(result));
+        }
+
+        Box::new(PrimitiveFloat::new(ff(left.to_f64(), right.to_f64())))
+    }
+
     fn do_op<FI: FnOnce(&i64, &i64) -> Option<i64>, FF: FnOnce(f64, f64) -> f64>(
         &self,
         right: &dyn Primitive,
@@ -1664,20 +1683,10 @@ impl PrimitiveString {
             return Err(ERROR_STRING_RHS.to_owned());
         };
 
-        let lhs = get_integer(&self.value);
-        let rhs = get_integer(&rhs.value);
-        let args = lhs.zip(rhs);
+        let args = self.get_numeric_values(rhs);
 
         if let Some((left, right)) = args {
-            if let (Integer::Int(left), Integer::Int(right)) = (left, right)
-                && let Some(result) = fi(&left, &right)
-            {
-                return Ok(Box::new(PrimitiveInt::new(result)));
-            }
-            return Ok(Box::new(PrimitiveFloat::new(ff(
-                left.to_f64(),
-                right.to_f64(),
-            ))));
+            return Ok(Self::apply_numeric_op(left, right, fi, ff));
         }
 
         Err(format!(
@@ -1724,7 +1733,22 @@ impl Primitive for PrimitiveString {
     }
 
     fn do_add(&self, other: &dyn Primitive) -> Result<Box<dyn Primitive>, String> {
-        self.do_op(other, checked::CheckedAdd::checked_add, ops::Add::add, "+")
+        let Some(rhs) = other.as_any().downcast_ref::<Self>() else {
+            return Err(ERROR_STRING_RHS.to_owned());
+        };
+
+        let args = self.get_numeric_values(rhs);
+
+        if let Some((left, right)) = args {
+            return Ok(Self::apply_numeric_op(
+                left,
+                right,
+                checked::CheckedAdd::checked_add,
+                ops::Add::add,
+            ));
+        }
+
+        Ok(Box::new(Self::new(format!("{}{}", self.value, rhs.value))))
     }
 
     fn do_sub(&self, other: &dyn Primitive) -> Result<Box<dyn Primitive>, String> {

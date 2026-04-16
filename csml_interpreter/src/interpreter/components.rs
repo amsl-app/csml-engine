@@ -56,6 +56,7 @@ fn read_components_dir(
 // PUBLIC FUNCTION
 ////////////////////////////////////////////////////////////////////////////////
 
+#[must_use]
 pub fn load_native_components() -> serde_json::Map<String, serde_json::Value> {
     let mut map = serde_json::Map::with_capacity(12);
 

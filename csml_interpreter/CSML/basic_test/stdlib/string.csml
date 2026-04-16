@@ -8,9 +8,13 @@ step_0:
 
     say s
 
+    do s = s + "!"
+
+    say s
+
     say s.to_uppercase()
 
-    say "HELLO WORLD".to_lowercase()
+    say "HELLO WORLD!".to_lowercase()
 
     goto end
 
