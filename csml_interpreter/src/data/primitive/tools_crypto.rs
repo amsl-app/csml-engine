@@ -1,6 +1,9 @@
 use crate::data::{ast::Interval, position::Position};
 use crate::error_format::{ERROR_DIGEST_ALGO, ERROR_HASH_ALGO, ErrorInfo, gen_error_info};
 
+use hex;
+use openssl;
+
 pub fn get_hash_algorithm(
     algo: &str,
     flow_name: &str,
