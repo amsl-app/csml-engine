@@ -395,9 +395,9 @@ fn string_step_12b_slice_error() {
     let data = r#"{
         "memories":[],
         "messages":[
-            { "content_type": "error", "content": {"error": "usage: slice(start: Integer, end: Optional<Integer>) => string at line 95, column 23 at flow [flow]"} },
+            { "content_type": "error", "content": {"error": "usage: slice(start: Integer, end: Optional<Integer>) => string at line 99, column 23 at flow [flow]"} },
             { "content_type": "text", "content": {"text": null} },
-            { "content_type": "error", "content": {"error": "usage: slice(start: Integer, end: Optional<Integer>) => string at line 96, column 23 at flow [flow]"} },
+            { "content_type": "error", "content": {"error": "usage: slice(start: Integer, end: Optional<Integer>) => string at line 100, column 23 at flow [flow]"} },
             { "content_type": "text", "content": {"text": null} }
         ]}"#;
     let msg = format_message(
