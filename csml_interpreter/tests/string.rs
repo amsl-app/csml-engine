@@ -14,12 +14,14 @@ fn string_step_0() {
     let data = r#"{
         "memories":[
             {"key":"s", "value":"Hello "},
-            {"key":"s", "value":"Hello World"}
+            {"key":"s", "value":"Hello World"},
+            {"key":"s", "value":"Hello World!"}
         ],
         "messages":[
             {"content":{"text": "Hello World"}, "content_type":"text"},
-            {"content":{"text": "HELLO WORLD"}, "content_type":"text"},
-            {"content":{"text": "hello world"}, "content_type":"text"}
+            {"content":{"text": "Hello World!"}, "content_type":"text"},
+            {"content":{"text": "HELLO WORLD!"}, "content_type":"text"},
+            {"content":{"text": "hello world!"}, "content_type":"text"}
         ]}"#;
     let msg = format_message(
         &Event::new("payload", "", serde_json::json!({})),

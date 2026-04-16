@@ -1,10 +1,10 @@
-use csml_interpreter::data::Context;
 use csml_interpreter::data::csml_bot::CsmlBot;
 use csml_interpreter::data::csml_flow::CsmlFlow;
 use csml_interpreter::data::event::Event;
 use csml_interpreter::data::message_data::MessageData;
+use csml_interpreter::data::Context;
 use csml_interpreter::{interpret, load_components};
-use serde_json::{Value, json, map::Map};
+use serde_json::{json, map::Map, Value};
 
 use std::fs::File;
 use std::io::prelude::*;
