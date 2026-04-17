@@ -1,6 +1,6 @@
 [package]
 name = "csml_engine"
-version = "1.11.2"
+version = "2.0.4"
 authors = [
     "Alexis Merelo <alexis.merelo@clevy.io>",
     "François Falala-Sechet <francois@clevy.io>",
@@ -84,7 +84,7 @@ optional = true
 
 [dependencies]
 async-stream = "0.3.6"
-csml_interpreter = { version = "1.11.2", path = "../csml_interpreter" }
+csml_interpreter = { version = "2.0.4", path = "../csml_interpreter" }
 csml_model = { version = "0.1.0", path = "../csml_model" }
 md-5 = "0.11.0"
 chrono = { version = "0.4.42", features = ["serde"]}
